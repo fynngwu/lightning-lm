@@ -5,7 +5,9 @@
 #include "common/options.h"
 #include "core/lightning_math.hpp"
 #include "laser_mapping.h"
+#if LIGHTNING_WITH_UI
 #include "ui/pangolin_window.h"
+#endif
 #include "wrapper/ros_utils.h"
 
 namespace lightning {
@@ -137,7 +139,9 @@ void LaserMapping::ProcessIMU(const lightning::IMUPtr &imu) {
 
         /// 更新ui
         if (ui_) {
+#if LIGHTNING_WITH_UI
             ui_->UpdateNavState(kf_imu_.GetX());
+#endif
         }
     }
 
@@ -183,8 +187,10 @@ bool LaserMapping::Run() {
         if (skip_lidar_cnt_ != 0) {
             /// 更新UI中的内容
             if (ui_) {
+#if LIGHTNING_WITH_UI
                 ui_->UpdateNavState(kf_.GetX());
                 ui_->UpdateScan(scan_undistort_, kf_.GetX().GetPose());
+#endif
             }
 
             return false;
@@ -274,7 +280,9 @@ bool LaserMapping::Run() {
     }
 
     if (ui_) {
+#if LIGHTNING_WITH_UI
         ui_->UpdateScan(scan_undistort_, state_point_.GetPose());
+#endif
     }
 
     return true;

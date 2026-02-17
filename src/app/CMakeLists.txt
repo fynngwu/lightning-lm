@@ -1,28 +1,27 @@
-add_executable(run_frontend_offline
-        run_frontend_offline.cc
-)
+if (LIGHTNING_WITH_UI)
+    add_executable(run_frontend_offline
+            run_frontend_offline.cc
+    )
 
-target_link_libraries(run_frontend_offline
-        ${PROJECT_NAME}.libs
-        ${third_party_libs}
-)
+    target_link_libraries(run_frontend_offline
+            lightning_system_core
+    )
 
-add_executable(run_loop_offline
-        run_loop_offline.cc
-)
+    add_executable(run_loop_offline
+            run_loop_offline.cc
+    )
 
-target_link_libraries(run_loop_offline
-        ${PROJECT_NAME}.libs
-        ${third_party_libs}
-)
+    target_link_libraries(run_loop_offline
+            lightning_system_core
+    )
+endif ()
 
 add_executable(run_slam_offline
         run_slam_offline.cc
 )
 
 target_link_libraries(run_slam_offline
-        ${PROJECT_NAME}.libs
-        ${third_party_libs}
+        lightning_system_core
 )
 
 add_executable(run_slam_online
@@ -30,8 +29,7 @@ add_executable(run_slam_online
 )
 
 target_link_libraries(run_slam_online
-        ${PROJECT_NAME}.libs
-        ${third_party_libs}
+        lightning_system_core
 )
 
 add_executable(run_loc_offline
@@ -39,8 +37,8 @@ add_executable(run_loc_offline
 )
 
 target_link_libraries(run_loc_offline
-        ${PROJECT_NAME}.libs
-        ${third_party_libs}
+        lightning_loc_core
+        lightning_system_core
 )
 
 add_executable(run_loc_online
@@ -48,18 +46,18 @@ add_executable(run_loc_online
 )
 
 target_link_libraries(run_loc_online
-        ${PROJECT_NAME}.libs
-        ${third_party_libs}
+        lightning_system_core
 )
 
-add_executable(test_ui
-        test_ui.cc
-)
+if (LIGHTNING_WITH_UI)
+    add_executable(test_ui
+            test_ui.cc
+    )
 
-target_link_libraries(test_ui
-        ${PROJECT_NAME}.libs
-        ${third_party_libs}
-)
+    target_link_libraries(test_ui
+            lightning_system_core
+    )
+endif ()
 
 install(TARGETS run_slam_offline run_slam_online run_loc_offline run_loc_online
         DESTINATION lib/${PROJECT_NAME})

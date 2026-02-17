@@ -7,7 +7,9 @@
 #include "core/lio/laser_mapping.h"
 #include "core/loop_closing/loop_closing.h"
 #include "core/maps/tiled_map.h"
+#if LIGHTNING_WITH_UI
 #include "ui/pangolin_window.h"
+#endif
 #include "wrapper/ros_utils.h"
 
 #include <yaml-cpp/yaml.h>
@@ -44,11 +46,22 @@ bool SlamSystem::Init(const std::string& yaml_path) {
     }
 
     if (options_.with_visualization_) {
+#if LIGHTNING_WITH_UI
         LOG(INFO) << "slam with 3D UI";
         ui_ = std::make_shared<ui::PangolinWindow>();
         ui_->Init();
+        if (yaml["ui"] && yaml["ui"]["scans"]) {
+            const int scan_keep_num = yaml["ui"]["scans"].as<int>();
+            if (scan_keep_num > 0) {
+                ui_->SetCurrentScanSize(scan_keep_num);
+                LOG(INFO) << "ui keep scans: " << scan_keep_num;
+            }
+        }
 
         lio_->SetUI(ui_);
+#else
+        LOG(WARNING) << "with_ui=true in config, but this build disables UI (LIGHTNING_WITH_UI=OFF)";
+#endif
     }
 
     if (options_.with_gridmap_) {
@@ -125,7 +138,9 @@ bool SlamSystem::Init(const std::string& yaml_path) {
 
 SlamSystem::~SlamSystem() {
     if (ui_) {
+#if LIGHTNING_WITH_UI
         ui_->Quit();
+#endif
     }
 }
 
@@ -266,7 +281,9 @@ void SlamSystem::ProcessLidar(const sensor_msgs::msg::PointCloud2::SharedPtr& cl
     }
 
     if (ui_) {
+#if LIGHTNING_WITH_UI
         ui_->UpdateKF(cur_kf_);
+#endif
     }
 }
 
@@ -298,7 +315,9 @@ void SlamSystem::ProcessLidar(const livox_ros_driver2::msg::CustomMsg::SharedPtr
     }
 
     if (ui_) {
+#if LIGHTNING_WITH_UI
         ui_->UpdateKF(cur_kf_);
+#endif
     }
 }
 

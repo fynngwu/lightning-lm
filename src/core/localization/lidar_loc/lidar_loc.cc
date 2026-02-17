@@ -14,7 +14,9 @@
 #include "glog/logging.h"
 #include "io/file_io.h"
 #include "io/yaml_io.h"
+#if LIGHTNING_WITH_UI
 #include "ui/pangolin_window.h"
+#endif
 #include "utils/timer.h"
 
 namespace lightning::loc {
@@ -411,8 +413,10 @@ void LidarLoc::UpdateMapThread() {
             UpdateGlobalMap();
 
             if (ui_) {
+#if LIGHTNING_WITH_UI
                 ui_->UpdatePointCloudGlobal(map_->GetStaticCloud());
                 ui_->UpdatePointCloudDynamic(map_->GetDynamicCloud());
+#endif
             }
 
             map_->CleanMapUpdate();

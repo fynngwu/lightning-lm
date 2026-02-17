@@ -5,7 +5,9 @@
 #include "core/localization/localization.h"
 #include "core/localization/pose_graph/pgo.h"
 #include "io/yaml_io.h"
+#if LIGHTNING_WITH_UI
 #include "ui/pangolin_window.h"
+#endif
 
 namespace lightning::loc {
 
@@ -22,6 +24,12 @@ bool Localization::Init(const std::string& yaml_path, const std::string& global_
 
     YAML_IO yaml(yaml_path);
     options_.with_ui_ = yaml.GetValue<bool>("system", "with_ui");
+#if !LIGHTNING_WITH_UI
+    if (options_.with_ui_) {
+        LOG(WARNING) << "with_ui=true in config, but this build disables UI (LIGHTNING_WITH_UI=OFF)";
+    }
+    options_.with_ui_ = false;
+#endif
 
     /// lidar odom前端
     LaserMapping::Options opt_lio;
@@ -42,13 +50,23 @@ bool Localization::Init(const std::string& yaml_path, const std::string& global_
     lidar_loc_ = std::make_shared<LidarLoc>(lidar_loc_options);
 
     if (options_.with_ui_) {
+#if LIGHTNING_WITH_UI
         ui_ = std::make_shared<ui::PangolinWindow>();
-        ui_->SetCurrentScanSize(10);
+        try {
+            const int scan_keep_num = yaml.GetValue<int>("ui", "scans");
+            if (scan_keep_num > 0) {
+                ui_->SetCurrentScanSize(scan_keep_num);
+                LOG(INFO) << "ui keep scans: " << scan_keep_num;
+            }
+        } catch (...) {
+            // keep default ui cache size when ui.scans is absent
+        }
         ui_->Init();
 
         lidar_loc_->SetUI(ui_);
 
         // lio_->SetUI(ui_);
+#endif
     }
 
     lidar_loc_->Init(yaml_path);
@@ -97,8 +115,10 @@ bool Localization::Init(const std::string& yaml_path, const std::string& global_
         }
 
         if (ui_) {
+#if LIGHTNING_WITH_UI
             ui_->UpdateNavState(loc_result_.ToNavState());
             ui_->UpdateRecentPose(loc_result_.pose_);
+#endif
         }
     });
 
@@ -221,8 +241,10 @@ void Localization::LidarLocProcCloud(CloudPtr scan_undist) {
     pgo_->ProcessLidarLoc(res);
 
     if (ui_) {
+#if LIGHTNING_WITH_UI
         // Twi with Til, here pose means Twl, thus Til=I
         ui_->UpdateScan(scan_undist, res.pose_);
+#endif
     }
 
     if (loc_state_callback_) {
@@ -310,7 +332,9 @@ void Localization::ProcessIMUMsg(IMUPtr imu) {
 void Localization::Finish() {
     lidar_loc_->Finish();
     if (ui_) {
+#if LIGHTNING_WITH_UI
         ui_->Quit();
+#endif
     }
 
     lidar_loc_proc_cloud_.Quit();

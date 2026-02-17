@@ -22,6 +22,9 @@ endif ()
 
 # Printf version info
 # include(cmake/version.cmake)
+if (NOT DEFINED LIVOX_ROS_DRIVER2_VERSION OR "${LIVOX_ROS_DRIVER2_VERSION}" STREQUAL "")
+  set(LIVOX_ROS_DRIVER2_VERSION "1.0.0")
+endif ()
 project(${PROJECT_NAME} VERSION ${LIVOX_ROS_DRIVER2_VERSION} LANGUAGES CXX)
 message(STATUS "${PROJECT_NAME} version: ${LIVOX_ROS_DRIVER2_VERSION}")
 

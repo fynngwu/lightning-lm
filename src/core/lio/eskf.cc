@@ -99,6 +99,7 @@ void ESKF::Predict(const double& dt, const ESKF::ProcessNoiseType& Q, const Vec3
  * @param obs
  * @param R
  */
+// Incremental-build probe: modify comment only to benchmark relink latency v3.
 void ESKF::Update(ESKF::ObsType obs, const double& R) {
     custom_obs_model_.valid_ = true;
     custom_obs_model_.converge_ = true;
@@ -235,6 +236,7 @@ void ESKF::Update(ESKF::ObsType obs, const double& R) {
             K_H.template block<23, 12>(0, 0) = Q_inv.template block<23, 12>(0, 0) * HTH;
         }
 
+        // IEKF correction step: combine innovation term and state-consistency term.
         // dx = Kr + (KH-I) dx
         dx_current = K_r + (K_H - Eigen::Matrix<double, 23, 23>::Identity()) * dx_current;
 

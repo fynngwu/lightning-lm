@@ -8,16 +8,30 @@ if (NOT CMAKE_CXX_STANDARD)
 endif ()
 
 # set to release by default
-set(CMAKE_BUILD_TYPE Release)
+if (NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
+    set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type" FORCE)
+endif ()
+
+option(LIGHTNING_WITH_UI "Build UI/Pangolin modules" OFF)
 
 # -------------------------------------------------------------
 # 导入第三方库，同时做一些全局编译选项配置
 add_definitions("-DPCL_NO_PRECOMPILE")
 
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fPIC -fopenmp -fPIC -g")
-set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS} -O2 -fopenmp -fPIC -g -ggdb")
-set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS} -ggdb -g -fopenmp -fPIC -g")
-set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fPIC -g")
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fPIC -fopenmp")
+set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -O3 -DNDEBUG")
+set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "${CMAKE_CXX_FLAGS_RELWITHDEBINFO} -O2 -g")
+set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} -O0 -g")
+set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fPIC")
+set(CMAKE_C_FLAGS_RELEASE "${CMAKE_C_FLAGS_RELEASE} -O3 -DNDEBUG")
+set(CMAKE_C_FLAGS_RELWITHDEBINFO "${CMAKE_C_FLAGS_RELWITHDEBINFO} -O2 -g")
+set(CMAKE_C_FLAGS_DEBUG "${CMAKE_C_FLAGS_DEBUG} -O0 -g")
+
+if (LIGHTNING_WITH_UI)
+    add_compile_definitions(LIGHTNING_WITH_UI=1)
+else ()
+    add_compile_definitions(LIGHTNING_WITH_UI=0)
+endif ()
 
 
 if (CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
@@ -54,8 +68,6 @@ include_directories(
 install(DIRECTORY config
         DESTINATION lib/${PROJECT_NAME}/
 )
-
-add_subdirectory(thirdparty/livox_ros_driver)
 
 add_subdirectory(src)
 
