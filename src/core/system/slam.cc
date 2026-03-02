@@ -13,6 +13,8 @@
 #include "wrapper/ros_utils.h"
 
 #include <yaml-cpp/yaml.h>
+#include <algorithm>
+#include <exception>
 #include <filesystem>
 #include <opencv2/opencv.hpp>
 
@@ -31,11 +33,53 @@ bool SlamSystem::Init(const std::string& yaml_path) {
     }
 
     auto yaml = YAML::LoadFile(yaml_path);
-    options_.with_loop_closing_ = yaml["system"]["with_loop_closing"].as<bool>();
-    options_.with_visualization_ = yaml["system"]["with_ui"].as<bool>();
-    options_.with_2dvisualization_ = yaml["system"]["with_2dui"].as<bool>();
-    options_.with_gridmap_ = yaml["system"]["with_g2p5"].as<bool>();
-    options_.step_on_kf_ = yaml["system"]["step_on_kf"].as<bool>();
+    const auto system_yaml = yaml["system"];
+    options_.with_loop_closing_ = system_yaml["with_loop_closing"].as<bool>();
+    options_.with_visualization_ = system_yaml["with_ui"].as<bool>();
+    options_.with_2dvisualization_ = system_yaml["with_2dui"].as<bool>();
+    options_.with_gridmap_ = system_yaml["with_g2p5"].as<bool>();
+    options_.step_on_kf_ = system_yaml["step_on_kf"].as<bool>();
+
+    if (system_yaml["pub_tf"]) {
+        options_.pub_tf_ = system_yaml["pub_tf"].as<bool>();
+    }
+    if (system_yaml["pub_scan"]) {
+        options_.pub_scan_ = system_yaml["pub_scan"].as<bool>();
+    }
+    if (system_yaml["pub_map"]) {
+        options_.pub_map_ = system_yaml["pub_map"].as<bool>();
+    }
+    const double default_pub_rate_hz = options_.pub_rate_hz_ > 0.0 ? options_.pub_rate_hz_ : 20.0;
+    if (options_.pub_rate_hz_ <= 0.0) {
+        LOG(WARNING) << "invalid default system pub_rate_hz=" << options_.pub_rate_hz_
+                     << ", fallback to " << default_pub_rate_hz;
+        options_.pub_rate_hz_ = default_pub_rate_hz;
+    }
+    if (system_yaml["pub_rate_hz"]) {
+        const double pub_rate_hz = system_yaml["pub_rate_hz"].as<double>();
+        if (pub_rate_hz <= 0.0) {
+            LOG(WARNING) << "invalid config system.pub_rate_hz=" << pub_rate_hz
+                         << ", keep default " << default_pub_rate_hz;
+        } else {
+            options_.pub_rate_hz_ = pub_rate_hz;
+        }
+    }
+
+    const int default_map_pub_kf_gap = std::max(1, options_.map_pub_kf_gap_);
+    if (options_.map_pub_kf_gap_ <= 0) {
+        LOG(WARNING) << "invalid default system map_pub_kf_gap=" << options_.map_pub_kf_gap_
+                     << ", fallback to " << default_map_pub_kf_gap;
+        options_.map_pub_kf_gap_ = default_map_pub_kf_gap;
+    }
+    if (system_yaml["map_pub_kf_gap"]) {
+        const int map_pub_kf_gap = system_yaml["map_pub_kf_gap"].as<int>();
+        if (map_pub_kf_gap <= 0) {
+            LOG(WARNING) << "invalid config system.map_pub_kf_gap=" << map_pub_kf_gap
+                         << ", keep default " << default_map_pub_kf_gap;
+        } else {
+            options_.map_pub_kf_gap_ = map_pub_kf_gap;
+        }
+    }
 
     if (options_.with_loop_closing_) {
         LOG(INFO) << "slam with loop closing";
@@ -43,6 +87,12 @@ bool SlamSystem::Init(const std::string& yaml_path) {
         options.online_mode_ = options_.online_mode_;
         lc_ = std::make_shared<LoopClosing>(options);
         lc_->Init(yaml_path);
+        lc_->SetLoopClosedCB([this]() {
+            if (options_.with_gridmap_ && g2p5_ != nullptr) {
+                g2p5_->RedrawGlobalMap();
+            }
+            MarkMapDirtyForPublish(true);
+        });
     }
 
     if (options_.with_visualization_) {
@@ -70,11 +120,6 @@ bool SlamSystem::Init(const std::string& yaml_path) {
 
         g2p5_ = std::make_shared<g2p5::G2P5>(opt);
         g2p5_->Init(yaml_path);
-
-        if (options_.with_loop_closing_) {
-            /// 当发生回环时，触发一次重绘
-            lc_->SetLoopClosedCB([this]() { g2p5_->RedrawGlobalMap(); });
-        }
 
         if (options_.with_2dvisualization_) {
             g2p5_->SetMapUpdateCallback([this](g2p5::G2P5MapPtr map) {
@@ -130,6 +175,23 @@ bool SlamSystem::Init(const std::string& yaml_path) {
             "lightning/save_map", [this](const SaveMapService::Request::SharedPtr& req,
                                          SaveMapService::Response::SharedPtr res) { SaveMap(req, res); });
 
+        if (options_.pub_tf_) {
+            tf_broadcaster_ = std::make_shared<tf2_ros::TransformBroadcaster>(node_);
+        }
+
+        if (options_.pub_scan_) {
+            current_scan_pub_ = node_->create_publisher<sensor_msgs::msg::PointCloud2>("lightning/current_scan", 10);
+        }
+
+        if (options_.pub_map_) {
+            global_map_pub_ = node_->create_publisher<sensor_msgs::msg::PointCloud2>("lightning/global_map", 1);
+        }
+
+        if (options_.pub_tf_ || options_.pub_scan_ || options_.pub_map_) {
+            publish_thread_exit_ = false;
+            publish_thread_ = std::thread(&SlamSystem::PublishLoop, this);
+        }
+
         LOG(INFO) << "online slam node has been created.";
     }
 
@@ -137,6 +199,11 @@ bool SlamSystem::Init(const std::string& yaml_path) {
 }
 
 SlamSystem::~SlamSystem() {
+    publish_thread_exit_ = true;
+    if (publish_thread_.joinable()) {
+        publish_thread_.join();
+    }
+
     if (ui_) {
 #if LIGHTNING_WITH_UI
         ui_->Quit();
@@ -259,7 +326,11 @@ void SlamSystem::ProcessLidar(const sensor_msgs::msg::PointCloud2::SharedPtr& cl
     }
 
     lio_->ProcessPointCloud2(cloud);
-    lio_->Run();
+    if (!lio_->Run()) {
+        return;
+    }
+
+    UpdatePublishSnapshots();
 
     auto kf = lio_->GetKeyframe();
     if (kf != cur_kf_) {
@@ -271,6 +342,8 @@ void SlamSystem::ProcessLidar(const sensor_msgs::msg::PointCloud2::SharedPtr& cl
     if (cur_kf_ == nullptr) {
         return;
     }
+
+    MarkMapDirtyForPublish(false);
 
     if (options_.with_loop_closing_) {
         lc_->AddKF(cur_kf_);
@@ -293,7 +366,11 @@ void SlamSystem::ProcessLidar(const livox_ros_driver2::msg::CustomMsg::SharedPtr
     }
 
     lio_->ProcessPointCloud2(cloud);
-    lio_->Run();
+    if (!lio_->Run()) {
+        return;
+    }
+
+    UpdatePublishSnapshots();
 
     auto kf = lio_->GetKeyframe();
     if (kf != cur_kf_) {
@@ -305,6 +382,8 @@ void SlamSystem::ProcessLidar(const livox_ros_driver2::msg::CustomMsg::SharedPtr
     if (cur_kf_ == nullptr) {
         return;
     }
+
+    MarkMapDirtyForPublish(false);
 
     if (options_.with_loop_closing_) {
         lc_->AddKF(cur_kf_);
@@ -324,6 +403,141 @@ void SlamSystem::ProcessLidar(const livox_ros_driver2::msg::CustomMsg::SharedPtr
 void SlamSystem::Spin() {
     if (options_.online_mode_ && node_ != nullptr) {
         spin(node_);
+    }
+}
+
+void SlamSystem::UpdatePublishSnapshots() {
+    if (!(options_.pub_tf_ || options_.pub_scan_)) {
+        return;
+    }
+
+    NavState latest_state = lio_->GetState();
+    std::shared_ptr<const PointCloudType> latest_scan = lio_->GetScanUndistShared();
+
+    std::lock_guard<std::mutex> lock(publish_snapshot_mutex_);
+    latest_pub_state_ = latest_state;
+    latest_pub_scan_ = latest_scan;
+    has_latest_pub_state_ = true;
+}
+
+void SlamSystem::MarkMapDirtyForPublish(bool force_republish) {
+    const size_t keyframe_count = lio_->GetKeyframeCount();
+
+    std::lock_guard<std::mutex> lock(publish_snapshot_mutex_);
+    latest_pub_kf_count_ = keyframe_count;
+    map_pub_dirty_ = true;
+    map_pub_force_republish_ = map_pub_force_republish_ || force_republish;
+}
+
+void SlamSystem::PublishLoop() {
+    rclcpp::WallRate rate(options_.pub_rate_hz_);
+
+    while (!publish_thread_exit_ && rclcpp::ok()) {
+        try {
+            NavState state_snapshot;
+            std::shared_ptr<const PointCloudType> scan_snapshot = nullptr;
+            bool has_state = false;
+            bool should_pub_map = false;
+            bool force_republish = false;
+            size_t map_pub_target_kf_count = 0;
+
+            {
+                std::lock_guard<std::mutex> lock(publish_snapshot_mutex_);
+                has_state = has_latest_pub_state_;
+                if (has_state) {
+                    state_snapshot = latest_pub_state_;
+                }
+                scan_snapshot = latest_pub_scan_;
+
+                if (options_.pub_map_ && global_map_pub_ != nullptr && map_pub_dirty_) {
+                    const size_t kf_gap = static_cast<size_t>(std::max(1, options_.map_pub_kf_gap_));
+                    const bool reach_gap = latest_pub_kf_count_ >= published_map_kf_count_ + kf_gap;
+                    force_republish = map_pub_force_republish_;
+                    if (reach_gap || force_republish) {
+                        should_pub_map = true;
+                        map_pub_target_kf_count = latest_pub_kf_count_;
+                    }
+                }
+            }
+
+            int64_t stamp_ns = node_->get_clock()->now().nanoseconds();
+            if (has_state && state_snapshot.timestamp_ > 0.0) {
+                stamp_ns = static_cast<int64_t>(state_snapshot.timestamp_ * 1e9);
+            }
+
+            builtin_interfaces::msg::Time stamp;
+            stamp.sec = static_cast<int32_t>(stamp_ns / 1000000000LL);
+            stamp.nanosec = static_cast<uint32_t>(stamp_ns % 1000000000LL);
+
+            if (options_.pub_tf_ && tf_broadcaster_ != nullptr && has_state) {
+                geometry_msgs::msg::TransformStamped tf;
+                tf.header.stamp = stamp;
+                tf.header.frame_id = "map";
+                tf.child_frame_id = "lidar";
+
+                const SO3 map_rot_lidar = state_snapshot.rot_ * state_snapshot.offset_R_lidar_;
+                const Vec3d map_pos_lidar = state_snapshot.rot_ * state_snapshot.offset_t_lidar_ + state_snapshot.pos_;
+                const Eigen::Quaterniond q = map_rot_lidar.unit_quaternion();
+
+                tf.transform.translation.x = map_pos_lidar.x();
+                tf.transform.translation.y = map_pos_lidar.y();
+                tf.transform.translation.z = map_pos_lidar.z();
+                tf.transform.rotation.x = q.x();
+                tf.transform.rotation.y = q.y();
+                tf.transform.rotation.z = q.z();
+                tf.transform.rotation.w = q.w();
+
+                tf_broadcaster_->sendTransform(tf);
+            }
+
+            if (options_.pub_scan_ && current_scan_pub_ != nullptr && scan_snapshot != nullptr) {
+                sensor_msgs::msg::PointCloud2 scan_msg;
+                pcl::toROSMsg(*scan_snapshot, scan_msg);
+                scan_msg.header.stamp = stamp;
+                scan_msg.header.frame_id = "lidar";
+                current_scan_pub_->publish(scan_msg);
+            }
+
+            if (should_pub_map) {
+                bool map_publish_succeeded = false;
+                auto global_map = lio_->GetGlobalMap(!options_.with_loop_closing_);
+                if (global_map == nullptr || global_map->empty()) {
+                    LOG(WARNING) << "skip map publish: global map is empty";
+                } else if (global_map_pub_ == nullptr) {
+                    LOG(WARNING) << "skip map publish: map publisher unavailable";
+                } else {
+                    sensor_msgs::msg::PointCloud2 global_map_msg;
+                    pcl::toROSMsg(*global_map, global_map_msg);
+                    global_map_msg.header.stamp = stamp;
+                    global_map_msg.header.frame_id = "map";
+                    global_map_pub_->publish(global_map_msg);
+                    map_publish_succeeded = true;
+                }
+
+                {
+                    std::lock_guard<std::mutex> lock(publish_snapshot_mutex_);
+                    if (map_publish_succeeded) {
+                        published_map_kf_count_ = std::max(published_map_kf_count_, map_pub_target_kf_count);
+                        map_pub_force_republish_ = false;
+                    }
+                    map_pub_dirty_ = map_pub_force_republish_ || (latest_pub_kf_count_ > published_map_kf_count_);
+                }
+            }
+
+            rate.sleep();
+        } catch (const std::exception& e) {
+            if (publish_thread_exit_) {
+                break;
+            }
+            LOG(ERROR) << "publish loop exception: " << e.what();
+            rate.sleep();
+        } catch (...) {
+            if (publish_thread_exit_) {
+                break;
+            }
+            LOG(ERROR) << "publish loop exception: unknown";
+            rate.sleep();
+        }
     }
 }
 

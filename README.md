@@ -115,13 +115,21 @@ Original dataset addresses:
 ### Mapping Test
 
 1. Real-time mapping (real-time bag playback)
-    - Start the mapping program:
-      ```ros2 run lightning run_slam_online --config ./config/default_nclt.yaml```
-    - Play the data bag
-    - Save the map ```ros2 service call /lightning/save_map lightning/srv/SaveMap "{map_id: new_map}"```
+     - Start the mapping program:
+       ```ros2 run lightning run_slam_online --config ./config/default_nclt.yaml```
+     - Play the data bag
+     - Save the map ```ros2 service call /lightning/save_map lightning/srv/SaveMap "{map_id: new_map}"```
+
+#### Online Publish Interfaces
+
+- TF: `map -> lidar`
+- `/lightning/current_scan`: `sensor_msgs/msg/PointCloud2`, `header.frame_id = lidar`
+- `/lightning/global_map`: `sensor_msgs/msg/PointCloud2`, `header.frame_id = map`
+- Related config keys in `system`: `pub_tf`, `pub_scan`, `pub_map`, `pub_rate_hz`, `map_pub_kf_gap`
+
 2. Offline mapping (traverse data, faster)
-    - ```ros2 run lightning run_slam_offline --config ./config/default_nclt.yaml --input_bag [bag_file]```
-    - It will automatically save to the data/new_map directory after finishing.
+     - ```ros2 run lightning run_slam_offline --config ./config/default_nclt.yaml --input_bag [bag_file]```
+     - It will automatically save to the data/new_map directory after finishing.
 3. Viewing the map
     - View the full map: ```pcl_viewer ./data/new_map/global.pcd```
     - The actual map is stored in blocks, global.pcd is only for displaying the result.
@@ -302,13 +310,21 @@ Ubuntu 20.04 应该也可行，未测试。
 ### 建图测试
 
 1. 实时建图（实时播包）
-    - 启动建图程序:
-      ```ros2 run lightning run_slam_online --config ./config/default_nclt.yaml```
-    - 播放数据包
-    - 保存地图 ```ros2 service call /lightning/save_map lightning/srv/SaveMap "{map_id: new_map}"```
+     - 启动建图程序:
+       ```ros2 run lightning run_slam_online --config ./config/default_nclt.yaml```
+     - 播放数据包
+     - 保存地图 ```ros2 service call /lightning/save_map lightning/srv/SaveMap "{map_id: new_map}"```
+
+#### 在线发布接口（run_slam_online）
+
+- TF：`map -> lidar`
+- `/lightning/current_scan`：`sensor_msgs/msg/PointCloud2`，`header.frame_id = lidar`
+- `/lightning/global_map`：`sensor_msgs/msg/PointCloud2`，`header.frame_id = map`
+- 相关配置项（`system`）：`pub_tf`、`pub_scan`、`pub_map`、`pub_rate_hz`、`map_pub_kf_gap`
+
 2. 离线建图（遍历跑数据，更快一些）
-    - ```ros2 run lightning run_slam_offline --config ./config/default_nclt.yaml --input_bag 数据包```
-    - 结束后会自动保存至data/new_map目录下
+     - ```ros2 run lightning run_slam_offline --config ./config/default_nclt.yaml --input_bag 数据包```
+     - 结束后会自动保存至data/new_map目录下
 3. 查看地图
     - 查看完整地图：```pcl_viewer ./data/new_map/global.pcd```
     - 实际地图是分块存储的，global.pcd仅用于显示结果

@@ -59,6 +59,10 @@ system:
   lidar_odom_skip_num: 2
   map_path: ./data/new_map/
   pub_tf: true
+  pub_scan: true
+  pub_map: true
+  pub_rate_hz: 20.0
+  map_pub_kf_gap: 5
 
 loop_closing:
   loop_kf_gap: 20       # 每隔多少个关键帧检查一次

@@ -160,27 +160,44 @@ bool LaserMapping::Run() {
         return false;
     }
 
-    /// IMU process, kf prediction, undistortion
-    p_imu_->Process(measures_, kf_, scan_undistort_);
+    CloudPtr scan_undistort(new PointCloudType());
 
-    if (scan_undistort_->empty() || (scan_undistort_ == nullptr)) {
+    /// IMU process, kf prediction, undistortion
+    p_imu_->Process(measures_, kf_, scan_undistort);
+
+    if (scan_undistort == nullptr || scan_undistort->empty()) {
         LOG(WARNING) << "No point, skip this scan!";
         return false;
     }
 
+    {
+        std::lock_guard<std::mutex> lock(mtx_shared_data_);
+        scan_undistort_ = scan_undistort;
+    }
+
     /// the first scan
     if (flg_first_scan_) {
-        LOG(INFO) << "first scan pts: " << scan_undistort_->size();
+        LOG(INFO) << "first scan pts: " << scan_undistort->size();
 
-        state_point_ = kf_.GetX();
-        scan_down_world_->resize(scan_undistort_->size());
-        for (int i = 0; i < scan_undistort_->size(); i++) {
-            PointBodyToWorld(scan_undistort_->points[i], scan_down_world_->points[i]);
+        NavState state_point = kf_.GetX();
+
+        {
+            std::lock_guard<std::mutex> lock(mtx_shared_data_);
+            state_point_ = state_point;
+        }
+
+        scan_down_world_->resize(scan_undistort->size());
+        for (int i = 0; i < scan_undistort->size(); i++) {
+            PointBodyToWorld(scan_undistort->points[i], scan_down_world_->points[i]);
         }
         ivox_->AddPoints(scan_down_world_->points);
 
         first_lidar_time_ = measures_.lidar_end_time_;
-        state_point_.timestamp_ = lidar_end_time_;
+        state_point.timestamp_ = lidar_end_time_;
+        {
+            std::lock_guard<std::mutex> lock(mtx_shared_data_);
+            state_point_ = state_point;
+        }
         flg_first_scan_ = false;
         return true;
     }
@@ -194,7 +211,7 @@ bool LaserMapping::Run() {
             if (ui_) {
 #if LIGHTNING_WITH_UI
                 ui_->UpdateNavState(kf_.GetX());
-                ui_->UpdateScan(scan_undistort_, kf_.GetX().GetPose());
+                ui_->UpdateScan(scan_undistort, kf_.GetX().GetPose());
 #endif
             }
 
@@ -214,12 +231,12 @@ bool LaserMapping::Run() {
     flg_EKF_inited_ = (measures_.lidar_begin_time_ - first_lidar_time_) >= fasterlio::INIT_TIME;
 
     /// downsample
-    voxel_scan_.setInputCloud(scan_undistort_);
+    voxel_scan_.setInputCloud(scan_undistort);
     voxel_scan_.filter(*scan_down_body_);
 
     int cur_pts = scan_down_body_->size();
     if (cur_pts < 5) {
-        LOG(WARNING) << "Too few points, skip this scan!" << scan_undistort_->size() << ", " << scan_down_body_->size();
+        LOG(WARNING) << "Too few points, skip this scan!" << scan_undistort->size() << ", " << scan_down_body_->size();
         return false;
     }
     scan_down_world_->resize(cur_pts);
@@ -235,41 +252,60 @@ bool LaserMapping::Run() {
             auto old_state = kf_.GetX();
 
             kf_.Update(ESKF::ObsType::LIDAR, 1e-3);
-            state_point_ = kf_.GetX();
+            NavState state_point = kf_.GetX();
 
-            if (keep_first_imu_estimation_ && all_keyframes_.size() < 5 &&
-                (old_state.rot_.inverse() * state_point_.rot_).log().norm() > 0.3 * M_PI / 180) {
+            size_t keyframe_count = 0;
+            {
+                std::lock_guard<std::mutex> lock(mtx_shared_data_);
+                keyframe_count = all_keyframes_.size();
+            }
+
+            if (keep_first_imu_estimation_ && keyframe_count < 5 &&
+                (old_state.rot_.inverse() * state_point.rot_).log().norm() > 0.3 * M_PI / 180) {
                 kf_.ChangeX(old_state);
-                state_point_ = old_state;
+                state_point = old_state;
 
                 LOG(INFO) << "set state as prediction";
             }
 
             // LOG(INFO) << "old yaw: " << old_state.rot_.angleZ() << ", new: " << state_point_.rot_.angleZ();
 
-            state_point_.timestamp_ = measures_.lidar_end_time_;
-            euler_cur_ = state_point_.rot_;
-            pos_lidar_ = state_point_.pos_ + state_point_.rot_ * state_point_.offset_t_lidar_;
+            state_point.timestamp_ = measures_.lidar_end_time_;
+            euler_cur_ = state_point.rot_;
+            pos_lidar_ = state_point.pos_ + state_point.rot_ * state_point.offset_t_lidar_;
+
+            {
+                std::lock_guard<std::mutex> lock(mtx_shared_data_);
+                state_point_ = state_point;
+            }
         },
         "IEKF Solve and Update");
 
     // update local map
     Timer::Evaluate([&, this]() { MapIncremental(); }, "    Incremental Mapping");
 
-    LOG(INFO) << "[ mapping ]: In num: " << scan_undistort_->points.size() << " down " << cur_pts
+    LOG(INFO) << "[ mapping ]: In num: " << scan_undistort->points.size() << " down " << cur_pts
               << " Map grid num: " << ivox_->NumValidGrids() << " effect num : " << effect_feat_num_;
 
     /// keyframes
-    if (last_kf_ == nullptr) {
-        MakeKF();
+    Keyframe::Ptr last_kf;
+    NavState state_point;
+    {
+        std::lock_guard<std::mutex> lock(mtx_shared_data_);
+        last_kf = last_kf_;
+        state_point = state_point_;
+    }
+
+    if (last_kf == nullptr) {
+        MakeKF(scan_undistort, state_point);
     } else {
-        SE3 last_pose = last_kf_->GetLIOPose();
-        SE3 cur_pose = state_point_.GetPose();
+        SE3 last_pose = last_kf->GetLIOPose();
+        SE3 cur_pose = state_point.GetPose();
         if ((last_pose.translation() - cur_pose.translation()).norm() > options_.kf_dis_th_ ||
             (last_pose.so3().inverse() * cur_pose.so3()).log().norm() > options_.kf_angle_th_) {
-            MakeKF();
-        } else if (!options_.is_in_slam_mode_ && (state_point_.timestamp_ - last_kf_->GetState().timestamp_) > 2.0) {
-            MakeKF();
+            MakeKF(scan_undistort, state_point);
+        } else if (!options_.is_in_slam_mode_ && (state_point.timestamp_ - last_kf->GetState().timestamp_) > 2.0) {
+            MakeKF(scan_undistort, state_point);
         }
     }
 
@@ -289,39 +325,50 @@ bool LaserMapping::Run() {
 
     if (ui_) {
 #if LIGHTNING_WITH_UI
-        ui_->UpdateScan(scan_undistort_, state_point_.GetPose());
+        ui_->UpdateScan(scan_undistort, state_point.GetPose());
 #endif
     }
 
     return true;
 }
 
-void LaserMapping::MakeKF() {
-    Keyframe::Ptr kf = std::make_shared<Keyframe>(kf_id_++, scan_undistort_, state_point_);
+void LaserMapping::MakeKF(CloudPtr scan_undistort, const NavState &state_point) {
+    Keyframe::Ptr last_kf;
+    int kf_id = 0;
+    {
+        std::lock_guard<std::mutex> lock(mtx_shared_data_);
+        last_kf = last_kf_;
+        kf_id = kf_id_++;
+    }
 
-    if (last_kf_) {
+    Keyframe::Ptr kf = std::make_shared<Keyframe>(kf_id, scan_undistort, state_point);
+
+    if (last_kf) {
         // LOG(INFO) << "last kf lio: " << last_kf_->GetLIOPose().translation().transpose()
         //           << ", opt: " << last_kf_->GetOptPose().translation().transpose();
 
         /// opt pose 用之前的递推
-        SE3 delta = last_kf_->GetLIOPose().inverse() * kf->GetLIOPose();
-        kf->SetOptPose(last_kf_->GetOptPose() * delta);
+        SE3 delta = last_kf->GetLIOPose().inverse() * kf->GetLIOPose();
+        kf->SetOptPose(last_kf->GetOptPose() * delta);
     } else {
         kf->SetOptPose(kf->GetLIOPose());
     }
 
-    kf->SetState(state_point_);
+    kf->SetState(state_point);
 
-    LOG(INFO) << "LIO: create kf " << kf->GetID() << ", state: " << state_point_.pos_.transpose()
+    LOG(INFO) << "LIO: create kf " << kf->GetID() << ", state: " << state_point.pos_.transpose()
               << ", kf opt pose: " << kf->GetOptPose().translation().transpose()
               << ", lio pose: " << kf->GetLIOPose().translation().transpose() << ", time: " << std::setprecision(14)
-              << state_point_.timestamp_;
+              << state_point.timestamp_;
 
-    if (options_.is_in_slam_mode_) {
-        all_keyframes_.emplace_back(kf);
+    {
+        std::lock_guard<std::mutex> lock(mtx_shared_data_);
+        if (options_.is_in_slam_mode_) {
+            all_keyframes_.emplace_back(kf);
+        }
+
+        last_kf_ = kf;
     }
-
-    last_kf_ = kf;
 }
 
 void LaserMapping::ProcessPointCloud2(const sensor_msgs::msg::PointCloud2::SharedPtr &msg) {
@@ -663,11 +710,16 @@ void LaserMapping::ObsModel(NavState &s, ESKF::CustomObservationModel &obs) {
 
 CloudPtr LaserMapping::GetGlobalMap(bool use_lio_pose, bool use_voxel, float res) {
     CloudPtr global_map(new PointCloudType);
+    std::vector<Keyframe::Ptr> all_keyframes;
+    {
+        std::lock_guard<std::mutex> lock(mtx_shared_data_);
+        all_keyframes = all_keyframes_;
+    }
 
     pcl::VoxelGrid<PointType> voxel;
     voxel.setLeafSize(res, res, res);
 
-    for (auto &kf : all_keyframes_) {
+    for (auto &kf : all_keyframes) {
         CloudPtr cloud = kf->GetCloud();
 
         CloudPtr cloud_filter(new PointCloudType);

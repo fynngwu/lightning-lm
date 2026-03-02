@@ -3,6 +3,7 @@
 
 #include <pcl/filters/voxel_grid.h>
 #include <condition_variable>
+#include <mutex>
 #include <sensor_msgs/msg/point_cloud2.hpp>
 #include <thread>
 
@@ -75,10 +76,16 @@ class LaserMapping {
     void SetUI(std::shared_ptr<ui::PangolinWindow> ui) { ui_ = ui; }
 
     /// 获取关键帧
-    Keyframe::Ptr GetKeyframe() const { return last_kf_; }
+    Keyframe::Ptr GetKeyframe() const {
+        std::lock_guard<std::mutex> lock(mtx_shared_data_);
+        return last_kf_;
+    }
 
     /// 获取激光的状态
-    NavState GetState() const { return state_point_; }
+    NavState GetState() const {
+        std::lock_guard<std::mutex> lock(mtx_shared_data_);
+        return state_point_;
+    }
 
     /// 获取IMU状态
     NavState GetIMUState() const {
@@ -91,12 +98,46 @@ class LaserMapping {
         }
     }
 
-    CloudPtr GetScanUndist() const { return scan_undistort_; }
+    /// Get a deep-copy snapshot of the latest undistorted scan.
+    /// This call allocates and copies point data, so it may be expensive.
+    CloudPtr GetScanUndist() const {
+        CloudPtr scan_shared;
+        {
+            std::lock_guard<std::mutex> lock(mtx_shared_data_);
+            scan_shared = scan_undistort_;
+        }
+
+        if (scan_shared == nullptr) {
+            return nullptr;
+        }
+
+        CloudPtr scan_snapshot(new PointCloudType());
+        *scan_snapshot = *scan_shared;
+        return scan_snapshot;
+    }
+
+    /// Get a zero-copy shared snapshot of the latest undistorted scan.
+    std::shared_ptr<const PointCloudType> GetScanUndistShared() const {
+        std::shared_ptr<const PointCloudType> scan_shared;
+        {
+            std::lock_guard<std::mutex> lock(mtx_shared_data_);
+            scan_shared = scan_undistort_;
+        }
+        return scan_shared;
+    }
+
+    size_t GetKeyframeCount() const {
+        std::lock_guard<std::mutex> lock(mtx_shared_data_);
+        return all_keyframes_.size();
+    }
 
     /// 获取最新的点云
     CloudPtr GetRecentCloud();
 
-    std::vector<Keyframe::Ptr> GetAllKeyframes() { return all_keyframes_; }
+    std::vector<Keyframe::Ptr> GetAllKeyframes() {
+        std::lock_guard<std::mutex> lock(mtx_shared_data_);
+        return all_keyframes_;
+    }
 
     /**
      * 计算全局地图
@@ -127,7 +168,7 @@ class LaserMapping {
     bool LoadParamsFromYAML(const std::string &yaml);
 
     /// 创建关键帧
-    void MakeKF();
+    void MakeKF(CloudPtr scan_undistort, const NavState &state_point);
 
    private:
     Options options_;
@@ -162,6 +203,8 @@ class LaserMapping {
     std::vector<float> residuals_;           // point-to-plane residuals
     std::vector<bool> point_selected_surf_;  // selected points
     std::vector<Vec4f> plane_coef_;          // plane coeffs
+
+    mutable std::mutex mtx_shared_data_;
 
     std::mutex mtx_buffer_;
     std::deque<double> time_buffer_;

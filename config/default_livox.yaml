@@ -46,7 +46,7 @@ g2p5:
 
 system:
   with_loop_closing: true # 是否需要回环检测
-  with_ui: true # 是否需要3D UI
+  with_ui: false # 是否需要3D UI
   with_2dui: false # 是否需要2D UI
   with_g2p5: true # 是否需要栅格地图
   step_on_kf: false # 是否在关键帧处暂停
@@ -59,6 +59,10 @@ system:
   lidar_odom_skip_num: 2
   map_path: ./data/new_map/
   pub_tf: true
+  pub_scan: true
+  pub_map: true
+  pub_rate_hz: 20.0
+  map_pub_kf_gap: 1
 
 loop_closing:
   loop_kf_gap: 20       # 每隔多少个关键帧检查一次

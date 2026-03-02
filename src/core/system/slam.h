@@ -6,9 +6,14 @@
 #define LIGHTNING_SLAM_H
 
 #include <rclcpp/rclcpp.hpp>
+#include <tf2_ros/transform_broadcaster.h>
+#include <geometry_msgs/msg/transform_stamped.hpp>
 #include <sensor_msgs/msg/imu.hpp>
 #include <sensor_msgs/msg/point_cloud2.hpp>
+#include <atomic>
+#include <mutex>
 #include <string>
+#include <thread>
 
 #include "lightning/srv/save_map.hpp"
 #include "livox_ros_driver2/msg/custom_msg.hpp"
@@ -47,6 +52,12 @@ class SlamSystem {
         bool with_2dvisualization_ = true;  // 是否需要2D可视化UI
 
         bool step_on_kf_ = true;  // 是否在关键帧处暂停p
+
+        bool pub_tf_ = true;
+        bool pub_scan_ = true;
+        bool pub_map_ = true;
+        double pub_rate_hz_ = 20.0;  // ROS发布频率
+        int map_pub_kf_gap_ = 5;     // 每隔多少关键帧发布一次地图
     };
 
     using SaveMapService = srv::SaveMap;
@@ -75,6 +86,10 @@ class SlamSystem {
     void Spin();
 
    private:
+    void UpdatePublishSnapshots();
+    void MarkMapDirtyForPublish(bool force_republish);
+    void PublishLoop();
+
     /// ros端保存地图的实现
     void SaveMap(const SaveMapService::Request::SharedPtr request, SaveMapService::Response::SharedPtr response);
 
@@ -94,6 +109,21 @@ class SlamSystem {
 
     /// 实时模式下的ros2 node, subscribers
     rclcpp::Node::SharedPtr node_;
+    std::shared_ptr<tf2_ros::TransformBroadcaster> tf_broadcaster_ = nullptr;
+    rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr current_scan_pub_ = nullptr;
+    rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr global_map_pub_ = nullptr;
+
+    std::thread publish_thread_;
+    std::atomic_bool publish_thread_exit_ = false;
+    std::mutex publish_snapshot_mutex_;
+    NavState latest_pub_state_;
+    std::shared_ptr<const PointCloudType> latest_pub_scan_ = nullptr;
+    bool has_latest_pub_state_ = false;
+    bool map_pub_dirty_ = false;
+    bool map_pub_force_republish_ = false;
+    size_t latest_pub_kf_count_ = 0;
+    size_t published_map_kf_count_ = 0;
+
     std::string imu_topic_;
     std::string cloud_topic_;
     std::string livox_topic_;
