@@ -131,7 +131,12 @@ void LaserMapping::ProcessIMU(const lightning::IMUPtr &imu) {
 
     if (p_imu_->IsIMUInited()) {
         /// 更新最新imu状态
-        kf_imu_.Predict(timestamp - last_timestamp_imu_, p_imu_->Q_, imu->angular_velocity, imu->linear_acceleration);
+        Vec3d acc_predict = imu->linear_acceleration;
+        const double mean_acc_norm = p_imu_->GetMeanAccNorm();
+        if (mean_acc_norm > 1e-6) {
+            acc_predict *= (G_m_s2 / mean_acc_norm);
+        }
+        kf_imu_.Predict(timestamp - last_timestamp_imu_, p_imu_->Q_, imu->angular_velocity, acc_predict);
 
         // LOG(INFO) << "newest wrt lidar: " << timestamp - kf_.GetX().timestamp_;
 
@@ -265,10 +270,13 @@ bool LaserMapping::Run() {
     /// 更新kf_for_imu
     kf_imu_ = kf_;
     if (!measures_.imu_.empty()) {
+        const double mean_acc_norm = p_imu_->GetMeanAccNorm();
+        const double acc_scale = mean_acc_norm > 1e-6 ? (G_m_s2 / mean_acc_norm) : 1.0;
         double t = measures_.imu_.back()->timestamp;
         for (auto &imu : imu_buffer_) {
             double dt = imu->timestamp - t;
-            kf_imu_.Predict(dt, p_imu_->Q_, imu->angular_velocity, imu->linear_acceleration);
+            const Vec3d acc_predict = imu->linear_acceleration * acc_scale;
+            kf_imu_.Predict(dt, p_imu_->Q_, imu->angular_velocity, acc_predict);
             t = imu->timestamp;
         }
     }
