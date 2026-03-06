@@ -286,6 +286,9 @@ bool LaserMapping::Run() {
 
     LOG(INFO) << "[ mapping ]: In num: " << scan_undistort->points.size() << " down " << cur_pts
               << " Map grid num: " << ivox_->NumValidGrids() << " effect num : " << effect_feat_num_;
+    const auto rpyxyz = math::SE3ToRollPitchYaw(state_point_.GetPose());
+    LOG(INFO) << "[ mapping ] kf_state: xyz=(" << rpyxyz.x << ", " << rpyxyz.y << ", " << rpyxyz.z
+              << "), rpy=(" << rpyxyz.roll << ", " << rpyxyz.pitch << ", " << rpyxyz.yaw << ")";
 
     /// keyframes
     Keyframe::Ptr last_kf;
