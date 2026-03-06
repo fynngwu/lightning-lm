@@ -56,6 +56,7 @@ class SlamSystem {
         bool pub_tf_ = true;
         bool pub_scan_ = true;
         bool pub_map_ = true;
+        bool pub_g2p5_map_ = true;
         double pub_rate_hz_ = 20.0;  // ROS发布频率
         int map_pub_kf_gap_ = 5;     // 每隔多少关键帧发布一次地图
     };
@@ -112,6 +113,7 @@ class SlamSystem {
     std::shared_ptr<tf2_ros::TransformBroadcaster> tf_broadcaster_ = nullptr;
     rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr current_scan_pub_ = nullptr;
     rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr global_map_pub_ = nullptr;
+    rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr g2p5_map_pub_ = nullptr;
 
     std::thread publish_thread_;
     std::atomic_bool publish_thread_exit_ = false;

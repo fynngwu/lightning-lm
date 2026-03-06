@@ -125,7 +125,8 @@ Original dataset addresses:
 - TF: `map -> lidar`
 - `/lightning/current_scan`: `sensor_msgs/msg/PointCloud2`, `header.frame_id = lidar`
 - `/lightning/global_map`: `sensor_msgs/msg/PointCloud2`, `header.frame_id = map`
-- Related config keys in `system`: `pub_tf`, `pub_scan`, `pub_map`, `pub_rate_hz`, `map_pub_kf_gap`
+- `/lightning/g2p5_map`: `sensor_msgs/msg/PointCloud2`, `header.frame_id = map` (occupied cells from G2P5 grid map)
+- Related config keys in `system`: `pub_tf`, `pub_scan`, `pub_map`, `pub_g2p5_map`, `pub_rate_hz`, `map_pub_kf_gap`
 
 2. Offline mapping (traverse data, faster)
      - ```ros2 run lightning run_slam_offline --config ./config/default_nclt.yaml --input_bag [bag_file]```
@@ -320,7 +321,8 @@ Ubuntu 20.04 应该也可行，未测试。
 - TF：`map -> lidar`
 - `/lightning/current_scan`：`sensor_msgs/msg/PointCloud2`，`header.frame_id = lidar`
 - `/lightning/global_map`：`sensor_msgs/msg/PointCloud2`，`header.frame_id = map`
-- 相关配置项（`system`）：`pub_tf`、`pub_scan`、`pub_map`、`pub_rate_hz`、`map_pub_kf_gap`
+- `/lightning/g2p5_map`：`sensor_msgs/msg/PointCloud2`，`header.frame_id = map`（来自 G2P5 栅格地图的占据点）
+- 相关配置项（`system`）：`pub_tf`、`pub_scan`、`pub_map`、`pub_g2p5_map`、`pub_rate_hz`、`map_pub_kf_gap`
 
 2. 离线建图（遍历跑数据，更快一些）
      - ```ros2 run lightning run_slam_offline --config ./config/default_nclt.yaml --input_bag 数据包```

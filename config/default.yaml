@@ -61,6 +61,7 @@ system:
   pub_tf: true
   pub_scan: true
   pub_map: true
+  pub_g2p5_map: true
   pub_rate_hz: 20.0
   map_pub_kf_gap: 5
 

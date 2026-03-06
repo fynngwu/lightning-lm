@@ -20,6 +20,62 @@
 
 namespace lightning {
 
+namespace {
+
+std::shared_ptr<PointCloudType> OccupancyGridToPointCloud(const nav_msgs::msg::OccupancyGrid& map) {
+    auto cloud = std::make_shared<PointCloudType>();
+
+    const uint32_t width = map.info.width;
+    const uint32_t height = map.info.height;
+    if (width == 0 || height == 0 || map.data.empty()) {
+        cloud->width = 0;
+        cloud->height = 1;
+        cloud->is_dense = true;
+        return cloud;
+    }
+
+    const size_t expected_cells = static_cast<size_t>(width) * static_cast<size_t>(height);
+    const size_t cell_count = std::min(expected_cells, map.data.size());
+
+    size_t occupied_count = 0;
+    for (size_t i = 0; i < cell_count; ++i) {
+        if (map.data[i] > 0) {
+            ++occupied_count;
+        }
+    }
+    cloud->reserve(occupied_count);
+
+    const float resolution = static_cast<float>(map.info.resolution);
+    const float origin_x = static_cast<float>(map.info.origin.position.x);
+    const float origin_y = static_cast<float>(map.info.origin.position.y);
+    const float origin_z = static_cast<float>(map.info.origin.position.z);
+
+    for (size_t i = 0; i < cell_count; ++i) {
+        const int8_t occupancy = map.data[i];
+        if (occupancy <= 0) {
+            continue;
+        }
+
+        const uint32_t x = static_cast<uint32_t>(i % width);
+        const uint32_t y = static_cast<uint32_t>(i / width);
+
+        PointType pt;
+        pt.x = origin_x + (static_cast<float>(x) + 0.5f) * resolution;
+        pt.y = origin_y + (static_cast<float>(y) + 0.5f) * resolution;
+        pt.z = origin_z;
+        pt.intensity = static_cast<float>(occupancy);
+        pt.time = 0.0f;
+        cloud->push_back(pt);
+    }
+
+    cloud->width = static_cast<uint32_t>(cloud->size());
+    cloud->height = 1;
+    cloud->is_dense = true;
+    return cloud;
+}
+
+}  // namespace
+
 SlamSystem::SlamSystem(lightning::SlamSystem::Options options) : options_(options) {
     /// handle ctrl-c
     signal(SIGINT, lightning::debug::SigHandle);
@@ -48,6 +104,9 @@ bool SlamSystem::Init(const std::string& yaml_path) {
     }
     if (system_yaml["pub_map"]) {
         options_.pub_map_ = system_yaml["pub_map"].as<bool>();
+    }
+    if (system_yaml["pub_g2p5_map"]) {
+        options_.pub_g2p5_map_ = system_yaml["pub_g2p5_map"].as<bool>();
     }
     const double default_pub_rate_hz = options_.pub_rate_hz_ > 0.0 ? options_.pub_rate_hz_ : 20.0;
     if (options_.pub_rate_hz_ <= 0.0) {
@@ -187,7 +246,12 @@ bool SlamSystem::Init(const std::string& yaml_path) {
             global_map_pub_ = node_->create_publisher<sensor_msgs::msg::PointCloud2>("lightning/global_map", 1);
         }
 
-        if (options_.pub_tf_ || options_.pub_scan_ || options_.pub_map_) {
+        if (options_.pub_g2p5_map_ && options_.with_gridmap_) {
+            g2p5_map_pub_ = node_->create_publisher<sensor_msgs::msg::PointCloud2>("lightning/g2p5_map", 1);
+        }
+
+        if (options_.pub_tf_ || options_.pub_scan_ || options_.pub_map_ ||
+            (options_.pub_g2p5_map_ && options_.with_gridmap_)) {
             publish_thread_exit_ = false;
             publish_thread_ = std::thread(&SlamSystem::PublishLoop, this);
         }
@@ -438,6 +502,8 @@ void SlamSystem::PublishLoop() {
             std::shared_ptr<const PointCloudType> scan_snapshot = nullptr;
             bool has_state = false;
             bool should_pub_map = false;
+            bool should_pub_global_map = false;
+            bool should_pub_g2p5_map = false;
             bool force_republish = false;
             size_t map_pub_target_kf_count = 0;
 
@@ -449,7 +515,10 @@ void SlamSystem::PublishLoop() {
                 }
                 scan_snapshot = latest_pub_scan_;
 
-                if (options_.pub_map_ && global_map_pub_ != nullptr && map_pub_dirty_) {
+                should_pub_global_map = options_.pub_map_ && global_map_pub_ != nullptr;
+                should_pub_g2p5_map = options_.pub_g2p5_map_ && options_.with_gridmap_ && g2p5_ != nullptr &&
+                                      g2p5_map_pub_ != nullptr;
+                if ((should_pub_global_map || should_pub_g2p5_map) && map_pub_dirty_) {
                     const size_t kf_gap = static_cast<size_t>(std::max(1, options_.map_pub_kf_gap_));
                     const bool reach_gap = latest_pub_kf_count_ >= published_map_kf_count_ + kf_gap;
                     force_republish = map_pub_force_republish_;
@@ -499,29 +568,57 @@ void SlamSystem::PublishLoop() {
             }
 
             if (should_pub_map) {
-                bool map_publish_succeeded = false;
-                auto global_map = lio_->GetGlobalMap(!options_.with_loop_closing_);
-                if (global_map == nullptr || global_map->empty()) {
-                    LOG(WARNING) << "skip map publish: global map is empty";
-                } else if (global_map_pub_ == nullptr) {
-                    LOG(WARNING) << "skip map publish: map publisher unavailable";
-                } else {
-                    sensor_msgs::msg::PointCloud2 global_map_msg;
-                    pcl::toROSMsg(*global_map, global_map_msg);
-                    global_map_msg.header.stamp = stamp;
-                    global_map_msg.header.frame_id = "map";
-                    global_map_pub_->publish(global_map_msg);
-                    map_publish_succeeded = true;
+                bool any_publish_attempt = false;
+                bool any_publish_success = false;
+
+                if (should_pub_global_map) {
+                    any_publish_attempt = true;
+                    auto global_map = lio_->GetGlobalMap(!options_.with_loop_closing_);
+                    if (global_map == nullptr || global_map->empty()) {
+                        LOG(WARNING) << "skip map publish: global map is empty";
+                    } else {
+                        sensor_msgs::msg::PointCloud2 global_map_msg;
+                        pcl::toROSMsg(*global_map, global_map_msg);
+                        global_map_msg.header.stamp = stamp;
+                        global_map_msg.header.frame_id = "map";
+                        global_map_pub_->publish(global_map_msg);
+                        any_publish_success = true;
+                    }
                 }
 
-                {
-                    std::lock_guard<std::mutex> lock(publish_snapshot_mutex_);
-                    if (map_publish_succeeded) {
-                        published_map_kf_count_ = std::max(published_map_kf_count_, map_pub_target_kf_count);
-                        map_pub_force_republish_ = false;
+                if (should_pub_g2p5_map) {
+                    any_publish_attempt = true;
+                    auto g2p5_map = g2p5_->GetNewestMap();
+                    if (g2p5_map == nullptr) {
+                        LOG(WARNING) << "skip g2p5 map publish: g2p5 map is null";
+                    } else {
+                        const auto occupancy_map = g2p5_map->ToROS();
+                        auto g2p5_cloud = OccupancyGridToPointCloud(occupancy_map);
+                        if (g2p5_cloud->empty()) {
+                            LOG(WARNING) << "skip g2p5 map publish: g2p5 map cloud is empty";
+                        } else {
+                            sensor_msgs::msg::PointCloud2 g2p5_map_msg;
+                            pcl::toROSMsg(*g2p5_cloud, g2p5_map_msg);
+                            g2p5_map_msg.header.stamp = stamp;
+                            g2p5_map_msg.header.frame_id = "map";
+                            g2p5_map_pub_->publish(g2p5_map_msg);
+                            any_publish_success = true;
+                        }
                     }
-                    map_pub_dirty_ = map_pub_force_republish_ || (latest_pub_kf_count_ > published_map_kf_count_);
                 }
+
+                if (!any_publish_attempt) {
+                    LOG(WARNING) << "skip map publish: map publishers unavailable";
+                }
+
+                if (any_publish_success) {
+                    std::lock_guard<std::mutex> lock(publish_snapshot_mutex_);
+                    published_map_kf_count_ = std::max(published_map_kf_count_, map_pub_target_kf_count);
+                    map_pub_force_republish_ = false;
+                }
+
+                std::lock_guard<std::mutex> lock(publish_snapshot_mutex_);
+                map_pub_dirty_ = map_pub_force_republish_ || (latest_pub_kf_count_ > published_map_kf_count_);
             }
 
             rate.sleep();
