@@ -5,15 +5,11 @@
 #ifndef LIGHTNING_SLAM_H
 #define LIGHTNING_SLAM_H
 
+#include <atomic>
 #include <rclcpp/rclcpp.hpp>
-#include <tf2_ros/transform_broadcaster.h>
-#include <geometry_msgs/msg/transform_stamped.hpp>
 #include <sensor_msgs/msg/imu.hpp>
 #include <sensor_msgs/msg/point_cloud2.hpp>
-#include <atomic>
-#include <mutex>
 #include <string>
-#include <thread>
 
 #include "lightning/srv/save_map.hpp"
 #include "livox_ros_driver2/msg/custom_msg.hpp"
@@ -28,7 +24,8 @@ class LaserMapping;  //  lio 前端
 class LoopClosing;   // 回环检测
 
 namespace ui {
-class PangolinWindow;
+class UIWindow;
+class PublishWindow;
 }
 
 namespace g2p5 {
@@ -50,15 +47,12 @@ class SlamSystem {
         bool with_loop_closing_ = true;     // 是否需要回环检测
         bool with_visualization_ = true;    // 是否需要可视化UI
         bool with_2dvisualization_ = true;  // 是否需要2D可视化UI
-
-        bool step_on_kf_ = true;  // 是否在关键帧处暂停p
-
         bool pub_tf_ = true;
         bool pub_scan_ = true;
         bool pub_map_ = true;
-        bool pub_g2p5_map_ = true;
-        double pub_rate_hz_ = 20.0;  // ROS发布频率
-        int map_pub_kf_gap_ = 5;     // 每隔多少关键帧发布一次地图
+        double pub_rate_hz_ = 20.0;
+
+        bool step_on_kf_ = true;  // 是否在关键帧处暂停p
     };
 
     using SaveMapService = srv::SaveMap;
@@ -87,10 +81,6 @@ class SlamSystem {
     void Spin();
 
    private:
-    void UpdatePublishSnapshots();
-    void MarkMapDirtyForPublish(bool force_republish);
-    void PublishLoop();
-
     /// ros端保存地图的实现
     void SaveMap(const SaveMapService::Request::SharedPtr request, SaveMapService::Response::SharedPtr response);
 
@@ -103,29 +93,14 @@ class SlamSystem {
 
     std::shared_ptr<LaserMapping> lio_ = nullptr;       // lio 前端
     std::shared_ptr<LoopClosing> lc_ = nullptr;         // 回环检测
-    std::shared_ptr<ui::PangolinWindow> ui_ = nullptr;  // ui
+    std::shared_ptr<ui::UIWindow> ui_ = nullptr;  // ui
+    std::shared_ptr<ui::PublishWindow> publisher_ui_ = nullptr;
     std::shared_ptr<g2p5::G2P5> g2p5_ = nullptr;        // 栅格地图
 
     Keyframe::Ptr cur_kf_ = nullptr;
 
     /// 实时模式下的ros2 node, subscribers
     rclcpp::Node::SharedPtr node_;
-    std::shared_ptr<tf2_ros::TransformBroadcaster> tf_broadcaster_ = nullptr;
-    rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr current_scan_pub_ = nullptr;
-    rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr global_map_pub_ = nullptr;
-    rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr g2p5_map_pub_ = nullptr;
-
-    std::thread publish_thread_;
-    std::atomic_bool publish_thread_exit_ = false;
-    std::mutex publish_snapshot_mutex_;
-    NavState latest_pub_state_;
-    std::shared_ptr<const PointCloudType> latest_pub_scan_ = nullptr;
-    bool has_latest_pub_state_ = false;
-    bool map_pub_dirty_ = false;
-    bool map_pub_force_republish_ = false;
-    size_t latest_pub_kf_count_ = 0;
-    size_t published_map_kf_count_ = 0;
-
     std::string imu_topic_;
     std::string cloud_topic_;
     std::string livox_topic_;

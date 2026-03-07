@@ -110,6 +110,7 @@ target_link_libraries(lightning_loc_core
 add_library(lightning_system_core SHARED
         core/system/slam.cc
         core/system/loc_system.cc
+        ui/publish_window.cc
         wrapper/bag_io.cc
 )
 

@@ -9,6 +9,7 @@
 #include "common/loop_candidate.h"
 #include "common/nav_state.h"
 #include "common/point_def.h"
+#include "ui/ui_window.h"
 
 namespace lightning::ui {
 
@@ -17,7 +18,7 @@ class PangolinWindowImpl;
 /**
  * @note 此类本身不直接涉及任何opengl和pangolin操作，应当放到PangolinWindowImpl中
  */
-class PangolinWindow {
+class PangolinWindow : public UIWindow {
    public:
     EIGEN_MAKE_ALIGNED_OPERATOR_NEW
 
@@ -27,38 +28,38 @@ class PangolinWindow {
     /// @brief 初始化窗口，后台启动render线程。
     /// @note 与opengl/pangolin无关的初始化，尽量放到此函数体中;
     ///       opengl/pangolin相关的内容，尽量放到PangolinWindowImpl::Init中。
-    bool Init();
+    bool Init() override;
 
-    void Reset(const std::vector<Keyframe::Ptr>& keyframes);
+    void Reset(const std::vector<Keyframe::Ptr>& keyframes) override;
 
     /// 更新激光地图点云，在激光定位中的地图发生改变时，由fusion调用
-    void UpdatePointCloudGlobal(const std::map<int, CloudPtr>& cloud);
+    void UpdatePointCloudGlobal(const std::map<int, CloudPtr>& cloud) override;
 
     /// 更新动态图层点云
-    void UpdatePointCloudDynamic(const std::map<int, CloudPtr>& cloud);
+    void UpdatePointCloudDynamic(const std::map<int, CloudPtr>& cloud) override;
 
     /// 更新kalman滤波器状态
-    void UpdateNavState(const NavState& state);
+    void UpdateNavState(const NavState& state) override;
 
     /// 更新最新的pose
-    void UpdateRecentPose(const SE3& pose);
+    void UpdateRecentPose(const SE3& pose) override;
 
     /// 更新一次scan和它对应的Pose
-    void UpdateScan(CloudPtr cloud, const SE3& pose);
+    void UpdateScan(CloudPtr cloud, const SE3& pose) override;
 
-    void UpdateKF(std::shared_ptr<Keyframe> kf);
+    void UpdateKF(std::shared_ptr<Keyframe> kf) override;
 
     /// 等待显示线程结束，并释放资源
-    void Quit();
+    void Quit() override;
 
     /// 用户是否已经退出UI
-    bool ShouldQuit();
+    bool ShouldQuit() override;
 
     /// 设置IMU到雷达的外参
-    void SetTImuLidar(const SE3& T_imu_lidar);
+    void SetTImuLidar(const SE3& T_imu_lidar) override;
 
     /// 设置需要保留多少个扫描数据
-    void SetCurrentScanSize(int current_scan_size);
+    void SetCurrentScanSize(int current_scan_size) override;
 
    private:
     std::shared_ptr<PangolinWindowImpl> impl_ = nullptr;
