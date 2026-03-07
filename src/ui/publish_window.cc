@@ -1,9 +1,7 @@
 #include "ui/publish_window.h"
 
-#include <algorithm>
-#include <chrono>
-
 #include <geometry_msgs/msg/transform_stamped.hpp>
+#include <pcl/filters/voxel_grid.h>
 #include <pcl_conversions/pcl_conversions.h>
 
 namespace lightning::ui {
@@ -17,25 +15,23 @@ bool PublishWindow::Init() {
         return false;
     }
 
-    if (pub_rate_hz_ <= 0.0) {
-        pub_rate_hz_ = 20.0;
-    }
-
     tf_broadcaster_ = std::make_unique<tf2_ros::TransformBroadcaster>(node_);
     current_scan_pub_ = node_->create_publisher<sensor_msgs::msg::PointCloud2>("lightning/current_scan", 10);
     history_map_pub_ = node_->create_publisher<sensor_msgs::msg::PointCloud2>("lightning/global_map", 1);
 
     exit_.store(false);
-    thread_ = std::thread(&PublishWindow::PublishLoop, this);
+    thread_ = std::thread(&PublishWindow::PublishWorker, this);
     return true;
 }
 
 void PublishWindow::Reset(const std::vector<Keyframe::Ptr>& keyframes) {
     (void)keyframes;
+
     std::lock_guard<std::mutex> lock(mtx_);
-    history_scans_.clear();
-    merged_history_cloud_->clear();
-    history_need_rebuild_ = false;
+    tf_tasks_.clear();
+    scan_tasks_.clear();
+    global_map_cloud_->clear();
+    scan_count_since_compact_ = 0;
 }
 
 void PublishWindow::UpdatePointCloudGlobal(const std::map<int, CloudPtr>& cloud) { (void)cloud; }
@@ -43,34 +39,60 @@ void PublishWindow::UpdatePointCloudGlobal(const std::map<int, CloudPtr>& cloud)
 void PublishWindow::UpdatePointCloudDynamic(const std::map<int, CloudPtr>& cloud) { (void)cloud; }
 
 void PublishWindow::UpdateNavState(const NavState& state) {
+    if (node_ == nullptr) {
+        return;
+    }
+
     std::lock_guard<std::mutex> lock(mtx_);
-    latest_state_ = state;
     latest_offset_R_lidar_ = state.offset_R_lidar_;
     latest_offset_t_lidar_ = state.offset_t_lidar_;
-    has_latest_state_ = true;
+
+    if (!pub_tf_) {
+        return;
+    }
+
+    TFTask task;
+    task.map_rot_lidar = state.rot_ * state.offset_R_lidar_;
+    task.map_pos_lidar = state.rot_ * state.offset_t_lidar_ + state.pos_;
+    task.stamp = node_->get_clock()->now();
+
+    tf_tasks_.clear();
+    tf_tasks_.push_back(std::move(task));
+    cv_.notify_one();
 }
 
 void PublishWindow::UpdateRecentPose(const SE3& pose) { (void)pose; }
 
 void PublishWindow::UpdateScan(CloudPtr cloud, const SE3& pose) {
-    if (cloud == nullptr) {
+    if (cloud == nullptr || cloud->empty() || node_ == nullptr) {
         return;
     }
 
+    auto scan_copy = std::make_shared<PointCloudType>();
+    *scan_copy = *cloud;
+
     std::lock_guard<std::mutex> lock(mtx_);
-    *latest_scan_ = *cloud;
-    has_latest_scan_ = !latest_scan_->empty();
-    latest_scan_pose_ = pose;
-    has_latest_scan_pose_ = true;
-    latest_scan_offset_R_lidar_ = latest_offset_R_lidar_;
-    latest_scan_offset_t_lidar_ = latest_offset_t_lidar_;
-    ++latest_scan_seq_;
+    ScanTask task;
+    task.scan = scan_copy;
+    task.T_map_imu = pose;
+    task.R_imu_lidar = latest_offset_R_lidar_;
+    task.t_imu_lidar = latest_offset_t_lidar_;
+    task.map_rot_lidar = pose.so3() * task.R_imu_lidar;
+    task.map_pos_lidar = pose.so3() * task.t_imu_lidar + pose.translation();
+    task.publish_tf = pub_tf_;
+    task.publish_scan = pub_scan_;
+    task.publish_map = pub_map_;
+    task.stamp = node_->get_clock()->now();
+
+    scan_tasks_.push_back(std::move(task));
+    cv_.notify_one();
 }
 
 void PublishWindow::UpdateKF(std::shared_ptr<Keyframe> kf) { (void)kf; }
 
 void PublishWindow::Quit() {
     exit_.store(true);
+    cv_.notify_all();
     if (thread_.joinable()) {
         thread_.join();
     }
@@ -80,29 +102,21 @@ bool PublishWindow::ShouldQuit() { return false; }
 
 void PublishWindow::SetTImuLidar(const SE3& T_imu_lidar) {
     std::lock_guard<std::mutex> lock(mtx_);
-    T_imu_lidar_ = T_imu_lidar;
+    latest_offset_R_lidar_ = T_imu_lidar.so3();
+    latest_offset_t_lidar_ = T_imu_lidar.translation();
 }
 
 void PublishWindow::SetCurrentScanSize(int current_scan_size) {
-    if (current_scan_size <= 0) {
-        return;
-    }
-
-    std::lock_guard<std::mutex> lock(mtx_);
-    history_scan_max_size_ = static_cast<size_t>(current_scan_size);
-    while (history_scans_.size() > history_scan_max_size_) {
-        history_scans_.pop_front();
-    }
-    history_need_rebuild_ = true;
+    (void)current_scan_size;
 }
 
-void PublishWindow::SetPublishOptions(bool pub_tf, bool pub_scan, bool pub_map, double pub_rate_hz) {
+void PublishWindow::SetPublishOptions(bool pub_tf, bool pub_scan, bool pub_map, double map_voxel_leaf_size) {
     std::lock_guard<std::mutex> lock(mtx_);
     pub_tf_ = pub_tf;
     pub_scan_ = pub_scan;
     pub_map_ = pub_map;
-    if (pub_rate_hz > 0.0) {
-        pub_rate_hz_ = pub_rate_hz;
+    if (map_voxel_leaf_size >= 0.0) {
+        map_voxel_leaf_size_ = map_voxel_leaf_size;
     }
 }
 
@@ -131,128 +145,122 @@ CloudPtr PublishWindow::TransformScanToMap(const PointCloudType& scan_lidar, con
     return scan_in_map;
 }
 
-void PublishWindow::AppendHistoryScan(const CloudPtr& scan_in_map) {
-    if (scan_in_map == nullptr || scan_in_map->empty()) {
+void PublishWindow::DownsampleCloudInplace(const CloudPtr& cloud, double voxel_leaf_size) const {
+    if (cloud == nullptr || cloud->empty() || voxel_leaf_size <= 1e-6) {
         return;
     }
 
-    history_scans_.push_back(scan_in_map);
-    *merged_history_cloud_ += *scan_in_map;
-
-    if (history_scans_.size() > history_scan_max_size_) {
-        history_scans_.pop_front();
-        history_need_rebuild_ = true;
-    }
-
-    if (history_need_rebuild_) {
-        merged_history_cloud_->clear();
-        for (const auto& cloud : history_scans_) {
-            if (cloud == nullptr || cloud->empty()) {
-                continue;
-            }
-            *merged_history_cloud_ += *cloud;
-        }
-        history_need_rebuild_ = false;
-    }
+    pcl::VoxelGrid<PointType> voxel_filter;
+    voxel_filter.setLeafSize(static_cast<float>(voxel_leaf_size), static_cast<float>(voxel_leaf_size),
+                             static_cast<float>(voxel_leaf_size));
+    voxel_filter.setInputCloud(cloud);
+    PointCloudType filtered;
+    voxel_filter.filter(filtered);
+    *cloud = std::move(filtered);
 }
 
-void PublishWindow::PublishLoop() {
-    while (!exit_.load()) {
-        double rate_hz = 20.0;
-        bool do_pub_tf = false;
-        bool do_pub_scan = false;
-        bool do_pub_map = false;
-
-        CloudPtr scan_snapshot;
-        CloudPtr history_snapshot;
-        bool has_tf_pose = false;
-        SO3 tf_map_rot_lidar;
-        Vec3d tf_map_pos_lidar = Vec3d::Zero();
-        bool has_scan_pose = false;
-        SE3 scan_pose;
-        SO3 scan_offset_R_lidar;
-        Vec3d scan_offset_t_lidar = Vec3d::Zero();
-        uint64_t scan_seq = 0;
+void PublishWindow::PublishWorker() {
+    while (true) {
+        TFTask tf_task;
+        ScanTask scan_task;
+        bool has_tf_task = false;
+        bool has_scan_task = false;
 
         {
-            std::lock_guard<std::mutex> lock(mtx_);
-            rate_hz = std::max(1e-3, pub_rate_hz_);
-            do_pub_tf = pub_tf_;
-            do_pub_scan = pub_scan_;
-            do_pub_map = pub_map_;
+            std::unique_lock<std::mutex> lock(mtx_);
+            cv_.wait(lock, [this]() { return exit_.load() || !scan_tasks_.empty() || !tf_tasks_.empty(); });
 
-            if (has_latest_state_) {
-                const auto& state = latest_state_;
-                tf_map_rot_lidar = state.rot_ * state.offset_R_lidar_;
-                tf_map_pos_lidar = state.rot_ * state.offset_t_lidar_ + state.pos_;
-                has_tf_pose = true;
+            if (exit_.load() && scan_tasks_.empty() && tf_tasks_.empty()) {
+                break;
             }
 
-            if (has_latest_scan_) {
-                scan_snapshot = std::make_shared<PointCloudType>();
-                *scan_snapshot = *latest_scan_;
-            }
-
-            has_scan_pose = has_latest_scan_pose_;
-            if (has_scan_pose) {
-                scan_pose = latest_scan_pose_;
-                scan_offset_R_lidar = latest_scan_offset_R_lidar_;
-                scan_offset_t_lidar = latest_scan_offset_t_lidar_;
-                scan_seq = latest_scan_seq_;
-
-                tf_map_rot_lidar = scan_pose.so3() * scan_offset_R_lidar;
-                tf_map_pos_lidar = scan_pose.so3() * scan_offset_t_lidar + scan_pose.translation();
-                has_tf_pose = true;
-            }
-
-            if (do_pub_map && has_scan_pose && scan_snapshot != nullptr && !scan_snapshot->empty() &&
-                scan_seq != last_history_scan_seq_) {
-                auto scan_in_map = TransformScanToMap(*scan_snapshot, scan_pose, scan_offset_R_lidar, scan_offset_t_lidar);
-                AppendHistoryScan(scan_in_map);
-                last_history_scan_seq_ = scan_seq;
-            }
-
-            if (do_pub_map && merged_history_cloud_ != nullptr && !merged_history_cloud_->empty()) {
-                history_snapshot = std::make_shared<PointCloudType>();
-                *history_snapshot = *merged_history_cloud_;
+            if (!scan_tasks_.empty()) {
+                scan_task = std::move(scan_tasks_.front());
+                scan_tasks_.pop_front();
+                has_scan_task = true;
+            } else if (!tf_tasks_.empty()) {
+                tf_task = std::move(tf_tasks_.front());
+                tf_tasks_.pop_front();
+                has_tf_task = true;
             }
         }
 
-        const auto stamp = node_->get_clock()->now();
-
-        if (do_pub_tf && has_tf_pose && tf_broadcaster_ != nullptr) {
+        if (has_tf_task && tf_broadcaster_ != nullptr) {
             geometry_msgs::msg::TransformStamped tf_msg;
-            tf_msg.header.stamp = stamp;
+            tf_msg.header.stamp = tf_task.stamp;
             tf_msg.header.frame_id = "map";
             tf_msg.child_frame_id = "lidar";
 
-            tf_msg.transform.translation.x = tf_map_pos_lidar.x();
-            tf_msg.transform.translation.y = tf_map_pos_lidar.y();
-            tf_msg.transform.translation.z = tf_map_pos_lidar.z();
-            tf_msg.transform.rotation.x = tf_map_rot_lidar.unit_quaternion().x();
-            tf_msg.transform.rotation.y = tf_map_rot_lidar.unit_quaternion().y();
-            tf_msg.transform.rotation.z = tf_map_rot_lidar.unit_quaternion().z();
-            tf_msg.transform.rotation.w = tf_map_rot_lidar.unit_quaternion().w();
+            tf_msg.transform.translation.x = tf_task.map_pos_lidar.x();
+            tf_msg.transform.translation.y = tf_task.map_pos_lidar.y();
+            tf_msg.transform.translation.z = tf_task.map_pos_lidar.z();
+            tf_msg.transform.rotation.x = tf_task.map_rot_lidar.unit_quaternion().x();
+            tf_msg.transform.rotation.y = tf_task.map_rot_lidar.unit_quaternion().y();
+            tf_msg.transform.rotation.z = tf_task.map_rot_lidar.unit_quaternion().z();
+            tf_msg.transform.rotation.w = tf_task.map_rot_lidar.unit_quaternion().w();
             tf_broadcaster_->sendTransform(tf_msg);
         }
 
-        if (do_pub_scan && has_tf_pose && scan_snapshot != nullptr && current_scan_pub_ != nullptr) {
-            sensor_msgs::msg::PointCloud2 msg;
-            pcl::toROSMsg(*scan_snapshot, msg);
-            msg.header.stamp = stamp;
-            msg.header.frame_id = "lidar";
-            current_scan_pub_->publish(msg);
-        }
+        if (has_scan_task) {
+            if (scan_task.publish_tf && tf_broadcaster_ != nullptr) {
+                geometry_msgs::msg::TransformStamped tf_msg;
+                tf_msg.header.stamp = scan_task.stamp;
+                tf_msg.header.frame_id = "map";
+                tf_msg.child_frame_id = "lidar";
 
-        if (do_pub_map && history_snapshot != nullptr && history_map_pub_ != nullptr) {
-            sensor_msgs::msg::PointCloud2 msg;
-            pcl::toROSMsg(*history_snapshot, msg);
-            msg.header.stamp = stamp;
-            msg.header.frame_id = "map";
-            history_map_pub_->publish(msg);
-        }
+                tf_msg.transform.translation.x = scan_task.map_pos_lidar.x();
+                tf_msg.transform.translation.y = scan_task.map_pos_lidar.y();
+                tf_msg.transform.translation.z = scan_task.map_pos_lidar.z();
+                tf_msg.transform.rotation.x = scan_task.map_rot_lidar.unit_quaternion().x();
+                tf_msg.transform.rotation.y = scan_task.map_rot_lidar.unit_quaternion().y();
+                tf_msg.transform.rotation.z = scan_task.map_rot_lidar.unit_quaternion().z();
+                tf_msg.transform.rotation.w = scan_task.map_rot_lidar.unit_quaternion().w();
+                tf_broadcaster_->sendTransform(tf_msg);
+            }
 
-        std::this_thread::sleep_for(std::chrono::duration<double>(1.0 / rate_hz));
+            if (scan_task.publish_scan && current_scan_pub_ != nullptr) {
+                sensor_msgs::msg::PointCloud2 scan_msg;
+                pcl::toROSMsg(*scan_task.scan, scan_msg);
+                scan_msg.header.stamp = scan_task.stamp;
+                scan_msg.header.frame_id = "lidar";
+                current_scan_pub_->publish(scan_msg);
+            }
+
+            if (scan_task.publish_map && history_map_pub_ != nullptr) {
+                auto scan_in_map =
+                    TransformScanToMap(*scan_task.scan, scan_task.T_map_imu, scan_task.R_imu_lidar, scan_task.t_imu_lidar);
+
+                double voxel_leaf_size = 0.0;
+                {
+                    std::lock_guard<std::mutex> lock(mtx_);
+                    voxel_leaf_size = map_voxel_leaf_size_;
+                }
+                DownsampleCloudInplace(scan_in_map, voxel_leaf_size);
+
+                CloudPtr map_snapshot;
+                {
+                    std::lock_guard<std::mutex> lock(mtx_);
+                    if (scan_in_map != nullptr && !scan_in_map->empty()) {
+                        *global_map_cloud_ += *scan_in_map;
+                        ++scan_count_since_compact_;
+
+                        if (scan_count_since_compact_ >= global_map_compact_every_n_) {
+                            DownsampleCloudInplace(global_map_cloud_, voxel_leaf_size);
+                            scan_count_since_compact_ = 0;
+                        }
+                    }
+
+                    map_snapshot = std::make_shared<PointCloudType>();
+                    *map_snapshot = *global_map_cloud_;
+                }
+
+                sensor_msgs::msg::PointCloud2 map_msg;
+                pcl::toROSMsg(*map_snapshot, map_msg);
+                map_msg.header.stamp = scan_task.stamp;
+                map_msg.header.frame_id = "map";
+                history_map_pub_->publish(map_msg);
+            }
+        }
     }
 }
 

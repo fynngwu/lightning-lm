@@ -62,7 +62,7 @@ system:
   pub_scan: true
   pub_map: true
   pub_g2p5_map: true
-  pub_rate_hz: 20.0
+  pub_map_voxel_leaf_size: 0.3
   map_pub_kf_gap: 5
 
 loop_closing:

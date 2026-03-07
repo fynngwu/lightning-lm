@@ -40,7 +40,7 @@ bool SlamSystem::Init(const std::string& yaml_path) {
     options_.pub_tf_ = yaml["system"]["pub_tf"].as<bool>();
     options_.pub_scan_ = yaml["system"]["pub_scan"].as<bool>();
     options_.pub_map_ = yaml["system"]["pub_map"].as<bool>();
-    options_.pub_rate_hz_ = yaml["system"]["pub_rate_hz"].as<double>();
+    options_.pub_map_voxel_leaf_size_ = yaml["system"]["pub_map_voxel_leaf_size"].as<double>();
 
     if (options_.with_loop_closing_) {
         LOG(INFO) << "slam with loop closing";
@@ -134,8 +134,8 @@ bool SlamSystem::Init(const std::string& yaml_path) {
         if (use_publisher_ui) {
             LOG(INFO) << "with_ui=false, use publish ui";
             publisher_ui_ = std::make_shared<ui::PublishWindow>(node_);
-            publisher_ui_->SetPublishOptions(options_.pub_tf_, options_.pub_scan_, options_.pub_map_, options_.pub_rate_hz_);
-            publisher_ui_->SetCurrentScanSize(200);
+            publisher_ui_->SetPublishOptions(options_.pub_tf_, options_.pub_scan_, options_.pub_map_,
+                                             options_.pub_map_voxel_leaf_size_);
             ui_ = publisher_ui_;
             if (!ui_->Init()) {
                 LOG(ERROR) << "failed to init publish ui";

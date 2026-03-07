@@ -50,7 +50,7 @@ class SlamSystem {
         bool pub_tf_ = true;
         bool pub_scan_ = true;
         bool pub_map_ = true;
-        double pub_rate_hz_ = 20.0;
+        double pub_map_voxel_leaf_size_ = 0.3;
 
         bool step_on_kf_ = true;  // 是否在关键帧处暂停p
     };

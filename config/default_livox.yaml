@@ -45,7 +45,7 @@ g2p5:
   grid_map_resolution: 0.2 # 栅格地图分辨率
 
 system:
-  with_loop_closing: true # 是否需要回环检测
+  with_loop_closing: false # 是否需要回环检测
   with_ui: false # 是否需要3D UI
   with_2dui: false # 是否需要2D UI
   with_g2p5: true # 是否需要栅格地图
@@ -62,7 +62,7 @@ system:
   pub_scan: true
   pub_map: true
   pub_g2p5_map: true
-  pub_rate_hz: 20.0
+  pub_map_voxel_leaf_size: 0.3
   map_pub_kf_gap: 1
   bootstrap_enable: false
   bootstrap_external_map_pcd: #"/home/wufy/slam_ws/data/new_map/0.pcd"
@@ -75,7 +75,7 @@ loop_closing:
   min_id_interval: 20   # 被检查的关键帧ID间隔
   closest_id_th: 50     # 历史关键帧与当前帧的ID间隔
   max_range: 30.0       # 候选帧的最大距离
-  ndt_score_th: 1.3     # ndt位姿分值
+  ndt_score_th: 1.8     # ndt位姿分值
   with_height: true
 
 
