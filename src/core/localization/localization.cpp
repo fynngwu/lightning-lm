@@ -1,6 +1,7 @@
 #include <pcl/common/transforms.h>
 #include <pcl_conversions/pcl_conversions.h>
 
+#include "core/lightning_math.hpp"
 #include "core/localization/lidar_loc/lidar_loc.h"
 #include "core/localization/localization.h"
 #include "core/localization/pose_graph/pgo.h"

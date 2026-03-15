@@ -4,6 +4,8 @@
 #include <pcl/filters/voxel_grid.h>
 #include <pcl_conversions/pcl_conversions.h>
 
+#include "core/lightning_math.hpp"
+
 namespace lightning::ui {
 
 PublishWindow::PublishWindow(rclcpp::Node::SharedPtr node) : node_(std::move(node)) {}
@@ -18,6 +20,7 @@ bool PublishWindow::Init() {
     tf_broadcaster_ = std::make_unique<tf2_ros::TransformBroadcaster>(node_);
     current_scan_pub_ = node_->create_publisher<sensor_msgs::msg::PointCloud2>("lightning/current_scan", 10);
     history_map_pub_ = node_->create_publisher<sensor_msgs::msg::PointCloud2>("lightning/global_map", 1);
+    ivox_map_pub_ = node_->create_publisher<sensor_msgs::msg::PointCloud2>("lightning/ivox_map", 1);
 
     exit_.store(false);
     thread_ = std::thread(&PublishWindow::PublishWorker, this);
@@ -50,15 +53,6 @@ void PublishWindow::UpdateNavState(const NavState& state) {
     if (!pub_tf_) {
         return;
     }
-
-    TFTask task;
-    task.map_rot_lidar = state.rot_ * state.offset_R_lidar_;
-    task.map_pos_lidar = state.rot_ * state.offset_t_lidar_ + state.pos_;
-    task.stamp = node_->get_clock()->now();
-
-    tf_tasks_.clear();
-    tf_tasks_.push_back(std::move(task));
-    cv_.notify_one();
 }
 
 void PublishWindow::UpdateRecentPose(const SE3& pose) { (void)pose; }
@@ -118,6 +112,37 @@ void PublishWindow::SetPublishOptions(bool pub_tf, bool pub_scan, bool pub_map, 
     if (map_voxel_leaf_size >= 0.0) {
         map_voxel_leaf_size_ = map_voxel_leaf_size;
     }
+}
+
+void PublishWindow::PublishPoseTF(const SE3& pose, const std::string& child_frame_id) {
+    if (node_ == nullptr || tf_broadcaster_ == nullptr || child_frame_id.empty()) {
+        return;
+    }
+
+    geometry_msgs::msg::TransformStamped tf_msg;
+    tf_msg.header.stamp = node_->get_clock()->now();
+    tf_msg.header.frame_id = "map";
+    tf_msg.child_frame_id = child_frame_id;
+    tf_msg.transform.translation.x = pose.translation().x();
+    tf_msg.transform.translation.y = pose.translation().y();
+    tf_msg.transform.translation.z = pose.translation().z();
+    tf_msg.transform.rotation.x = pose.unit_quaternion().x();
+    tf_msg.transform.rotation.y = pose.unit_quaternion().y();
+    tf_msg.transform.rotation.z = pose.unit_quaternion().z();
+    tf_msg.transform.rotation.w = pose.unit_quaternion().w();
+    tf_broadcaster_->sendTransform(tf_msg);
+}
+
+void PublishWindow::PublishIVoxMap(CloudPtr cloud) {
+    if (node_ == nullptr || ivox_map_pub_ == nullptr || cloud == nullptr) {
+        return;
+    }
+
+    sensor_msgs::msg::PointCloud2 cloud_msg;
+    pcl::toROSMsg(*cloud, cloud_msg);
+    cloud_msg.header.stamp = node_->get_clock()->now();
+    cloud_msg.header.frame_id = "map";
+    ivox_map_pub_->publish(cloud_msg);
 }
 
 CloudPtr PublishWindow::TransformScanToMap(const PointCloudType& scan_lidar, const SE3& T_map_imu, const SO3& R_imu_lidar,

@@ -23,6 +23,8 @@ namespace ui {
 class UIWindow;
 }
 
+class SlamSystem;
+
 /**
  * laser mapping
  * 目前有个问题：点云在缓存之后，实际处理的并不是最新的那个点云（通常是buffer里的前一个），这是因为bag里的点云用的开始时间戳，导致
@@ -96,6 +98,9 @@ class LaserMapping {
     /// 获取最新的点云
     CloudPtr GetRecentCloud();
 
+    bool ComputeUndistortedScanForExternalInit(CloudPtr& scan_undist, double& stamp_sec);
+    bool GetLatestUndistortedScanForExternalInit(CloudPtr& scan_undist, double& stamp_sec) const;
+
     std::vector<Keyframe::Ptr> GetAllKeyframes() { return all_keyframes_; }
 
     /**
@@ -130,6 +135,8 @@ class LaserMapping {
     void MakeKF();
 
    private:
+    friend class SlamSystem;
+
     Options options_;
 
     /// modules
@@ -192,6 +199,8 @@ class LaserMapping {
     int effect_feat_num_ = 0, frame_num_ = 0;
 
     double last_lidar_time_ = 0;
+    bool enable_map_incremental_ = true;
+    double latest_undistorted_stamp_sec_ = 0.0;
 
     ///////////////////////// EKF inputs and output ///////////////////////////////////////////////////////
     MeasureGroup measures_;  // sync IMU and lidar scan

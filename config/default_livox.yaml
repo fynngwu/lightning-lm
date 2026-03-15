@@ -13,7 +13,8 @@ fasterlio:
   time_scale: 1e-3             # 兼容不同数据集的时间单位，仅对Velodyne LiDAR(lidar_type=2)生效
 
   skip_lidar_num: 0 # 点云的跳帧情况
-  point_filter_num: 3 # 点云采样参数
+  enable_map_incremental: false # 是否持续增量更新局部地图
+  point_filter_num: 5 # 点云采样参数
   max_iteration: 6 # 最大迭代次数
   filter_size_scan: 0.3 # 对scan进行的降采样
   filter_size_map: 0.3
@@ -54,21 +55,17 @@ system:
   enable_lidar_loc_skip: false
   enable_lidar_loc_rviz: false
   enable_lidar_odom_skip: false
-  evaluation: false
   lidar_loc_skip_num: 4
   lidar_odom_skip_num: 2
   map_path: ./data/new_map/
+
+  enable_online_init: true
+  online_init_map_path: ./data/new_map/
+
   pub_tf: true
   pub_scan: true
   pub_map: true
-  pub_g2p5_map: true
   pub_map_voxel_leaf_size: 0.3
-  map_pub_kf_gap: 1
-  bootstrap_enable: false
-  bootstrap_external_map_pcd: #"/home/wufy/slam_ws/data/new_map/0.pcd"
-  bootstrap_use_external_init_pose: false
-  bootstrap_external_init_pose: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]   # x y z roll pitch yaw
-  bootstrap_timeout_sec: 15.0
 
 loop_closing:
   loop_kf_gap: 20       # 每隔多少个关键帧检查一次

@@ -13,6 +13,7 @@ fasterlio:
   time_scale: 1e-3             # 兼容不同数据集的时间单位，仅对Velodyne LiDAR(lidar_type=2)生效
 
   skip_lidar_num: 0 # 点云的跳帧情况
+  enable_map_incremental: true # 是否持续增量更新局部地图
   point_filter_num: 10 # 点云采样参数
   max_iteration: 6 # 最大迭代次数
   filter_size_scan: 0.5 # 对scan进行的降采样
@@ -59,6 +60,8 @@ system:
   lidar_loc_skip_num: 4
   lidar_odom_skip_num: 2
   map_path: ./data/new_map/
+  enable_online_init: false
+  online_init_map_path: ""
   pub_tf: true
 
 loop_closing:

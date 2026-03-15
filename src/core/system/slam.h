@@ -6,9 +6,11 @@
 #define LIGHTNING_SLAM_H
 
 #include <atomic>
+#include <geometry_msgs/msg/pose_with_covariance_stamped.hpp>
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/imu.hpp>
 #include <sensor_msgs/msg/point_cloud2.hpp>
+#include <std_msgs/msg/bool.hpp>
 #include <string>
 
 #include "lightning/srv/save_map.hpp"
@@ -22,6 +24,7 @@ namespace lightning {
 
 class LaserMapping;  //  lio 前端
 class LoopClosing;   // 回环检测
+class SimpleYawInitializer;
 
 namespace ui {
 class UIWindow;
@@ -37,6 +40,12 @@ class G2P5;
  */
 class SlamSystem {
    public:
+    enum class OnlineInitState {
+        RUNNING,
+        WAIT_NEXT_SCAN_FOR_INIT,
+        WAIT_NEXT_INITIALPOSE,
+    };
+
     struct Options {
         Options() {}
 
@@ -81,6 +90,15 @@ class SlamSystem {
     void Spin();
 
    private:
+    void HandleInitialPose(const geometry_msgs::msg::PoseWithCovarianceStamped::SharedPtr& msg);
+    void TriggerDefaultInitialPoseOnce();
+    void HandleKeyframeUpdate();
+    void HandleOnlineInitLidar();
+    void HandlePublishIVoxMapRequest(const std_msgs::msg::Bool::SharedPtr& msg);
+    bool TryOnlineInitWithScan(CloudPtr scan_undist, double stamp_sec, const std::string& scan_source);
+    void ApplyOnlineInitResult(const SE3& pose, double stamp_sec, CloudPtr local_map);
+    void PublishCurrentIVoxMap(double stamp_sec);
+
     /// ros端保存地图的实现
     void SaveMap(const SaveMapService::Request::SharedPtr request, SaveMapService::Response::SharedPtr response);
 
@@ -98,6 +116,12 @@ class SlamSystem {
     std::shared_ptr<g2p5::G2P5> g2p5_ = nullptr;        // 栅格地图
 
     Keyframe::Ptr cur_kf_ = nullptr;
+    std::shared_ptr<SimpleYawInitializer> yaw_init_ = nullptr;
+    bool enable_online_init_ = false;
+    std::string online_init_map_path_;
+    OnlineInitState online_init_state_ = OnlineInitState::RUNNING;
+    SE3 pending_init_pose_;
+    bool online_init_auto_requested_ = false;
 
     /// 实时模式下的ros2 node, subscribers
     rclcpp::Node::SharedPtr node_;
@@ -108,6 +132,8 @@ class SlamSystem {
     rclcpp::Subscription<sensor_msgs::msg::Imu>::SharedPtr imu_sub_ = nullptr;
     rclcpp::Subscription<sensor_msgs::msg::PointCloud2>::SharedPtr cloud_sub_ = nullptr;
     rclcpp::Subscription<livox_ros_driver2::msg::CustomMsg>::SharedPtr livox_sub_ = nullptr;
+    rclcpp::Subscription<geometry_msgs::msg::PoseWithCovarianceStamped>::SharedPtr initialpose_sub_ = nullptr;
+    rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr publish_ivox_map_sub_ = nullptr;
 };
 }  // namespace lightning
 

@@ -87,6 +87,9 @@ class IVox {
     /// get number of valid grids
     size_t NumValidGrids() const;
 
+    /// export all cached points for visualization/debug
+    PointVector GetAllPoints() const;
+
     /// get statistics of the points
     std::vector<float> StatGridPoints() const;
 
@@ -207,6 +210,21 @@ size_t IVox<dim, node_type, PointType>::NumPoints() const {
         ret += g.second->second.Size();
     }
     return ret;
+}
+
+template <int dim, IVoxNodeType node_type, typename PointType>
+typename IVox<dim, node_type, PointType>::PointVector IVox<dim, node_type, PointType>::GetAllPoints() const {
+    PointVector points;
+    points.reserve(NumPoints());
+
+    for (const auto& grid : grids_cache_) {
+        const auto& node = grid.second;
+        for (std::size_t i = 0; i < node.Size(); ++i) {
+            points.emplace_back(node.GetPoint(i));
+        }
+    }
+
+    return points;
 }
 
 template <int dim, IVoxNodeType node_type, typename PointType>

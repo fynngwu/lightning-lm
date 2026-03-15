@@ -84,6 +84,7 @@ add_library(lightning_loc_core SHARED
         core/localization/lidar_loc/pclomp/ndt_omp.cpp
         core/localization/lidar_loc/pclomp/voxel_grid_covariance_omp.cpp
         core/localization/localization.cpp
+        core/system/simple_yaw_initializer.cpp
 )
 
 ament_target_dependencies(

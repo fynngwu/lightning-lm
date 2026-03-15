@@ -10,6 +10,7 @@
 #include <sensor_msgs/msg/point_cloud2.hpp>
 #include <tf2_ros/transform_broadcaster.h>
 
+#include "common/eigen_types.h"
 #include "ui/ui_window.h"
 
 namespace lightning::ui {
@@ -33,6 +34,8 @@ class PublishWindow : public UIWindow {
     void SetCurrentScanSize(int current_scan_size) override;
 
     void SetPublishOptions(bool pub_tf, bool pub_scan, bool pub_map, double map_voxel_leaf_size);
+    void PublishPoseTF(const SE3& pose, const std::string& child_frame_id);
+    void PublishIVoxMap(CloudPtr cloud);
 
    private:
     CloudPtr TransformScanToMap(const PointCloudType& scan_lidar, const SE3& T_map_imu, const SO3& R_imu_lidar,
@@ -46,6 +49,7 @@ class PublishWindow : public UIWindow {
     std::unique_ptr<tf2_ros::TransformBroadcaster> tf_broadcaster_;
     rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr current_scan_pub_;
     rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr history_map_pub_;
+    rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr ivox_map_pub_;
 
     std::mutex mtx_;
     struct TFTask {

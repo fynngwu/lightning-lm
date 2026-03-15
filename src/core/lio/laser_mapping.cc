@@ -65,6 +65,9 @@ bool LaserMapping::LoadParamsFromYAML(const std::string &yaml_file) {
 
         skip_lidar_num_ = yaml["fasterlio"]["skip_lidar_num"].as<int>();
         enable_skip_lidar_ = skip_lidar_num_ > 0;
+        if (yaml["fasterlio"]["enable_map_incremental"]) {
+            enable_map_incremental_ = yaml["fasterlio"]["enable_map_incremental"].as<bool>();
+        }
 
     } catch (...) {
         LOG(ERROR) << "bad conversion";
@@ -167,19 +170,24 @@ bool LaserMapping::Run() {
     /// the first scan
     if (flg_first_scan_) {
         LOG(INFO) << "first scan pts: " << scan_undistort_->size();
+        latest_undistorted_stamp_sec_ = measures_.lidar_end_time_;
 
         state_point_ = kf_.GetX();
-        scan_down_world_->resize(scan_undistort_->size());
-        for (int i = 0; i < scan_undistort_->size(); i++) {
-            PointBodyToWorld(scan_undistort_->points[i], scan_down_world_->points[i]);
+        if (enable_map_incremental_) {
+            scan_down_world_->resize(scan_undistort_->size());
+            for (int i = 0; i < scan_undistort_->size(); i++) {
+                PointBodyToWorld(scan_undistort_->points[i], scan_down_world_->points[i]);
+            }
+            ivox_->AddPoints(scan_down_world_->points);
         }
-        ivox_->AddPoints(scan_down_world_->points);
 
         first_lidar_time_ = measures_.lidar_end_time_;
         state_point_.timestamp_ = lidar_end_time_;
         flg_first_scan_ = false;
         return true;
     }
+
+    latest_undistorted_stamp_sec_ = measures_.lidar_end_time_;
 
     if (enable_skip_lidar_) {
         skip_lidar_cnt_++;
@@ -248,7 +256,9 @@ bool LaserMapping::Run() {
         "IEKF Solve and Update");
 
     // update local map
-    Timer::Evaluate([&, this]() { MapIncremental(); }, "    Incremental Mapping");
+    if (enable_map_incremental_) {
+        Timer::Evaluate([&, this]() { MapIncremental(); }, "    Incremental Mapping");
+    }
 
     LOG(INFO) << "[ mapping ]: In num: " << scan_undistort_->points.size() << " down " << cur_pts
               << " Map grid num: " << ivox_->NumValidGrids() << " effect num : " << effect_feat_num_;
@@ -289,6 +299,39 @@ bool LaserMapping::Run() {
     }
 
     return true;
+}
+
+bool LaserMapping::ComputeUndistortedScanForExternalInit(CloudPtr &scan_undist, double &stamp_sec) {
+    scan_undist = nullptr;
+    stamp_sec = 0.0;
+
+    if (!SyncPackages()) {
+        return false;
+    }
+
+    p_imu_->Process(measures_, kf_, scan_undistort_);
+    if (scan_undistort_ == nullptr || scan_undistort_->empty()) {
+        LOG(WARNING) << "No point for external init";
+        return false;
+    }
+
+    latest_undistorted_stamp_sec_ = measures_.lidar_end_time_;
+    scan_undist = scan_undistort_;
+    stamp_sec = measures_.lidar_end_time_;
+    return true;
+}
+
+bool LaserMapping::GetLatestUndistortedScanForExternalInit(CloudPtr &scan_undist, double &stamp_sec) const {
+    scan_undist = nullptr;
+    stamp_sec = 0.0;
+
+    if (scan_undistort_ == nullptr || scan_undistort_->empty()) {
+        return false;
+    }
+
+    scan_undist = scan_undistort_;
+    stamp_sec = latest_undistorted_stamp_sec_;
+    return stamp_sec > 0.0;
 }
 
 void LaserMapping::MakeKF() {

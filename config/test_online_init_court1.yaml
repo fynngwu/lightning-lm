@@ -1,5 +1,6 @@
+# court1 ros2 bag online init validation config
 common:
-  dataset: "nclt"
+  dataset: "court1"
   lidar_topic: "points_raw"
   livox_lidar_topic: "/livox/lidar"
   imu_topic: "/livox/imu"
@@ -9,20 +10,16 @@ fasterlio:
   scan_line: 4
   blind: 0.5
   time_scale: 1e-3
-
   skip_lidar_num: 0
-  enable_map_incremental: true
+  enable_map_incremental: false
   point_filter_num: 3
-  max_iteration: 3
+  max_iteration: 6
   filter_size_scan: 0.5
   filter_size_map: 0.5
-
   ivox_grid_resolution: 0.5
   ivox_nearby_type: 18
   esti_plane_threshold: 0.1
-
   use_aa: true
-
   acc_cov: 0.1
   gyr_cov: 0.1
   b_acc_cov: 0.0001
@@ -43,28 +40,30 @@ g2p5:
   grid_map_resolution: 0.2
 
 system:
-  with_loop_closing: true
-  with_ui: true
+  with_loop_closing: false
+  with_ui: false
   with_2dui: false
-  with_g2p5: true
+  with_g2p5: false
   step_on_kf: false
-
   enable_lidar_loc_skip: false
   enable_lidar_loc_rviz: false
   enable_lidar_odom_skip: false
   lidar_loc_skip_num: 4
   lidar_odom_skip_num: 2
-  map_path: ./data/mainbuilding_mid360_map/
-  enable_online_init: false
-  online_init_map_path: ""
+  map_path: ./data/new_map/
+  enable_online_init: true
+  online_init_map_path: ./data/new_map/
   pub_tf: true
+  pub_scan: true
+  pub_map: true
+  pub_map_voxel_leaf_size: 0.3
 
 loop_closing:
   loop_kf_gap: 20
   min_id_interval: 20
   closest_id_th: 50
   max_range: 30.0
-  ndt_score_th: 1.3
+  ndt_score_th: 1.8
   with_height: true
 
 lidar_loc:
@@ -77,10 +76,10 @@ lidar_loc:
   filter_z_min: -1.0
   force_2d: false
   grid_search_angle_range: 180.0
-  grid_search_angle_step: 60
+  grid_search_angle_step: 36
   lidar_loc_odom_th: 0.5
   init_with_fp: true
-  min_init_confidence: 1.8
+  min_init_confidence: 1.0
   update_dynamic_cloud: true
   update_err_h: 0.2
   update_err_v: 0.2
@@ -93,11 +92,11 @@ maps:
   delete_when_unload: false
   dyn_cloud_policy: persistent
   load_dyn_cloud: true
-  load_map_size: 20
+  load_map_size: 2
   max_pts_dyn_chunk: 100000
   save_dyn_when_quit: true
   save_dyn_when_unload: false
-  unload_map_size: 40
+  unload_map_size: 4
   with_dyn_area: false
 
 pgo:
@@ -129,4 +128,4 @@ ui:
   car_length: 2.0
   car_width: 1.6
   car_height: 1.7
-  scans: 2000
+  scans: 1
