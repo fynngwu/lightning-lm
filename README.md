@@ -1,11 +1,33 @@
 # Lightning-LM
 
-## 编译
+## 安装依赖
 
-在工作空间根目录执行：
+### 1. 基础依赖
+
+在项目根目录执行：
 
 ```bash
-colcon build --packages-select lightning --parallel-workers 1 --cmake-args -DCMAKE_BUILD_TYPE=RelWithDebInfo
+./scripts/install_dep.sh
+```
+
+### 2. Livox 驱动（可选）
+
+如果需要使用 Livox 激光雷达且尚未安装 `livox_driver2`，可通过以下仓库一键安装：
+
+```bash
+git clone https://github.com/fynngwu/livox-ros2-setup.git
+cd livox-ros2-setup
+./install_livox_driver.sh
+```
+
+安装完成后，需要根据实际情况修改 Livox 配置中的雷达 IP 和连接网络 IP，具体配置文件位于 Livox 驱动目录下。
+
+## 编译
+
+在 ROS2 工作空间根目录执行：
+
+```bash
+colcon build --packages-select lightning --cmake-args -DCMAKE_BUILD_TYPE=RelWithDebInfo
 source install/setup.bash
 ```
 
@@ -17,7 +39,7 @@ source install/setup.bash
 
 ```bash
 ros2 run lightning run_slam_offline \
-  --config ./config/default.yaml \
+  --config /home/wufy/slam_ws/src/lightning-lm/config/default_livox.yaml \
   --input_bag /path/to/your.bag
 ```
 
@@ -33,7 +55,7 @@ system:
 ### 2. 在线运行
 
 ```bash
-ros2 run lightning run_slam_online --config ./config/default.yaml
+ros2 run lightning run_slam_online --config /home/wufy/slam_ws/src/lightning-lm/config/default_livox.yaml
 ```
 
 然后播放 bag：
@@ -84,7 +106,7 @@ system:
 3. 启动在线程序：
 
 ```bash
-ros2 run lightning run_slam_online --config ./config/default_livox.yaml
+ros2 run lightning run_slam_online --config /home/wufy/slam_ws/src/lightning-lm/config/default_livox.yaml
 ```
 
 4. 播放 bag：
