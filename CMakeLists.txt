@@ -13,6 +13,7 @@ if (NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
 endif ()
 
 option(LIGHTNING_WITH_UI "Build UI/Pangolin modules" OFF)
+option(LIGHTNING_BUILD_LOC_APPS "Build run_loc executables" OFF)
 
 # -------------------------------------------------------------
 # 导入第三方库，同时做一些全局编译选项配置

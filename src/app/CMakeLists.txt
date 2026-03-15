@@ -32,22 +32,24 @@ target_link_libraries(run_slam_online
         lightning_system_core
 )
 
-add_executable(run_loc_offline
-        run_loc_offline.cc
-)
+if (LIGHTNING_BUILD_LOC_APPS)
+    add_executable(run_loc_offline
+            run_loc_offline.cc
+    )
 
-target_link_libraries(run_loc_offline
-        lightning_loc_core
-        lightning_system_core
-)
+    target_link_libraries(run_loc_offline
+            lightning_loc_core
+            lightning_system_core
+    )
 
-add_executable(run_loc_online
-        run_loc_online.cc
-)
+    add_executable(run_loc_online
+            run_loc_online.cc
+    )
 
-target_link_libraries(run_loc_online
-        lightning_system_core
-)
+    target_link_libraries(run_loc_online
+            lightning_system_core
+    )
+endif ()
 
 if (LIGHTNING_WITH_UI)
     add_executable(test_ui
@@ -59,5 +61,17 @@ if (LIGHTNING_WITH_UI)
     )
 endif ()
 
-install(TARGETS run_slam_offline run_slam_online run_loc_offline run_loc_online
+set(LIGHTNING_APP_TARGETS
+        run_slam_offline
+        run_slam_online
+)
+
+if (LIGHTNING_BUILD_LOC_APPS)
+    list(APPEND LIGHTNING_APP_TARGETS
+            run_loc_offline
+            run_loc_online
+    )
+endif ()
+
+install(TARGETS ${LIGHTNING_APP_TARGETS}
         DESTINATION lib/${PROJECT_NAME})
